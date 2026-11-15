@@ -90,6 +90,7 @@ display:
 | `recover_orphans` | `false` | 在 `state/` 登记流式中的卡片并定期保存快照；网关崩溃或被杀后，下一轮把遗留的「处理中」卡片换成最后快照并标记已中断 |
 | `rollover_minutes` | `0` | 飞书约 10 分钟关闭流式；卡片超过该时长时封存旧卡（注明内容见下一张）并换新卡（`0` 关闭，建议 `8`） |
 | `header.enabled` | `false` | 显示顶部状态标题 |
+| `header.title` | `status` | 完成态标题：`status`（「已完成」）或 `conclusion`（最终正文第一行，去掉 Markdown，最多 80 字；出错/停止仍显示状态） |
 | `body.text_size` | `normal_v2` | 正文 Markdown 字号，使用 CardKit 支持的字号标记 |
 | `footer.enabled` | `true` | 显示完成态页脚 |
 | `footer.text_size` | `notation` | 页脚字号，使用 CardKit 支持的字号标记 |

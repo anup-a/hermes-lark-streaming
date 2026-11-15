@@ -111,6 +111,13 @@ class Config:
         return bool(header.get("enabled", False))
 
     @property
+    def header_title(self) -> str:
+        """完成态 header 标题：status（「已完成」）或 conclusion（正文第一行结论）."""
+        header = self._card_options().get("header", {})
+        title = header.get("title") if isinstance(header, dict) else None
+        return "conclusion" if title == "conclusion" else "status"
+
+    @property
     def footer_enabled(self) -> bool:
         """完成态卡片是否显示 footer."""
         sec = self._card_options()
