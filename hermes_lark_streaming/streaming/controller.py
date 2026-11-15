@@ -664,8 +664,9 @@ class StreamingController:
 
         await session.flush.wait_for_flush()
         if self._cfg.split_content and not session.state.is_terminal:
-            # 最后一段正文可能还没 flush，先拆卡，避免完成态把它并入过程卡
-            await self._do_flush(session)
+            # 最后一段正文可能还没 flush，先拆卡，避免完成态把它并入过程卡。
+            # 必须经 flush_now 走互斥锁，否则与定时 flush 并发会重复拆卡。
+            await session.flush.flush_now(lambda: self._do_flush(session))
         session.flush.mark_completed()
 
         segment_state = session.segment_state

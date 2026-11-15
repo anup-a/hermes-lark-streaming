@@ -395,3 +395,24 @@ async def test_split_content_off_keeps_one_card(controller):
     await c._do_flush(session)
     await c.frame("t", "chat", "answer", reply_to="in", source_id="in", finalize=True)
     assert c._client.cardkit_create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_split_content_completion_does_not_race_scheduled_flush(split_controller):
+    c = split_controller
+    ids = iter(f"card-{n}" for n in range(1, 10))
+
+    async def slow_create(_card):
+        await asyncio.sleep(0.5)
+        return next(ids)
+
+    c._client.cardkit_create.side_effect = slow_create
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    session = c.turns["t"].session
+    await _tool(c, "one", "ls")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "answer", reply_to="in", source_id="in")
+    await asyncio.sleep(0)
+    await c.frame("t", "chat", "answer", reply_to="in", source_id="in", finalize=True)
+    await asyncio.sleep(1.0)
+    assert c._client.cardkit_create.await_count == 2
