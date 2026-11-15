@@ -328,3 +328,70 @@ async def test_sequence_recovery_is_bounded_and_only_handles_conflicts(controlle
     assert error.value.code == code
     assert operation.await_count == attempts
     assert len({c.kwargs["request_id"] for c in operation.await_args_list}) == 1
+
+
+@pytest.fixture
+def split_controller(tmp_path):
+    cfg = Config(tmp_path, extra={"card": {"split_content": True}})
+    client = create_autospec(FeishuClient, instance=True)
+    client.cardkit_create.side_effect = [f"card-{n}" for n in range(1, 10)]
+    client.reply_card_by_id.return_value = "message"
+    client.send_card_to_chat.return_value = "message"
+    return StreamCardController(cfg, client)
+
+
+async def _tool(controller, call_id, command):
+    payload = {"tool_name": "terminal", "tool_call_id": call_id, "args": {"command": command}}
+    await controller.observe("in", "tool_start", payload)
+    await controller.observe("in", "tool_end", {**payload, "duration_ms": 5})
+
+
+def _updates(controller):
+    return {c.args[0]: str(c.args[1]) for c in controller._client.cardkit_update.await_args_list}
+
+
+@pytest.mark.asyncio
+async def test_split_content_puts_work_and_answer_on_separate_cards(split_controller):
+    c = split_controller
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    session = c.turns["t"].session
+    await _tool(c, "one", "ls work-log-marker")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "final-answer-marker", reply_to="in", source_id="in")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "final-answer-marker", reply_to="in", source_id="in", finalize=True)
+    assert c._client.cardkit_create.await_count == 2
+    cards = _updates(c)
+    assert "work-log-marker" in cards["card-1"] and "final-answer-marker" not in cards["card-1"]
+    assert "final-answer-marker" in cards["card-2"] and "work-log-marker" not in cards["card-2"]
+
+
+@pytest.mark.asyncio
+async def test_split_content_alternates_when_work_resumes_after_text(split_controller):
+    c = split_controller
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    session = c.turns["t"].session
+    await _tool(c, "one", "first-tool-marker")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "interim-note-marker", reply_to="in", source_id="in")
+    await c._do_flush(session)
+    await _tool(c, "two", "second-tool-marker")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "interim-note-marker\n\nfinal-marker", reply_to="in", source_id="in", finalize=True)
+    assert c._client.cardkit_create.await_count == 4
+    cards = _updates(c)
+    assert "first-tool-marker" in cards["card-1"]
+    assert "interim-note-marker" in cards["card-2"] and "tool-marker" not in cards["card-2"]
+    assert "second-tool-marker" in cards["card-3"] and "marker\\n\\nfinal" not in cards["card-3"]
+    assert "final-marker" in cards["card-4"] and "tool-marker" not in cards["card-4"]
+
+
+@pytest.mark.asyncio
+async def test_split_content_off_keeps_one_card(controller):
+    c = controller
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    session = c.turns["t"].session
+    await _tool(c, "one", "ls")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "answer", reply_to="in", source_id="in", finalize=True)
+    assert c._client.cardkit_create.await_count == 1

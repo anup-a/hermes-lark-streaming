@@ -196,6 +196,20 @@ class StreamingController:
                 continue
 
             if not seg.created:
+                if self._cfg.split_content and not session.split_disabled:
+                    if seg.type == SegmentType.ANSWER and not seg.text.strip():
+                        continue
+                    if self._content_kind_changes(session, segments, i, new_el_ids, show_tool_use):
+                        split_ok = await self._do_split_card(
+                            session, i, actions, new_el_ids, new_el_estimates, updated_tool_segs,
+                        )
+                        if not split_ok:
+                            return
+                        actions = []
+                        new_el_ids = set()
+                        new_el_estimates = {}
+                        updated_tool_segs = []
+                        new_el_total = 0
                 estimated = estimate_segment_elements(seg, all_steps)
                 if (
                     seg.type == SegmentType.TOOL
@@ -339,6 +353,24 @@ class StreamingController:
                 if session.guard.terminate("stream_element", e):
                     return
                 _logger.debug("CardKit stream element failed: %s el=%s", e, seg.el_id, exc_info=True)
+
+    @staticmethod
+    def _content_kind_changes(
+        session: CardSession,
+        segments: list[Segment],
+        index: int,
+        pending_ids: set[str],
+        show_tool_use: bool,
+    ) -> bool:
+        """当前卡片最后一个可见段与新段在「过程 / 正文」之间切换时返回 True."""
+        is_answer = segments[index].type == SegmentType.ANSWER
+        for prev in reversed(segments[session.split_index:index]):
+            if prev.type == SegmentType.TOOL and not show_tool_use:
+                continue
+            if not (prev.created or prev.el_id in pending_ids):
+                continue
+            return (prev.type == SegmentType.ANSWER) != is_answer
+        return False
 
     async def _do_batch_update(
         self,
@@ -631,6 +663,9 @@ class StreamingController:
             return False
 
         await session.flush.wait_for_flush()
+        if self._cfg.split_content and not session.state.is_terminal:
+            # 最后一段正文可能还没 flush，先拆卡，避免完成态把它并入过程卡
+            await self._do_flush(session)
         session.flush.mark_completed()
 
         segment_state = session.segment_state

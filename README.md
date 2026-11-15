@@ -72,6 +72,7 @@ display:
 | `enabled` | `true` | 启用原生流式卡片；`false` 仅关闭流式接管，停用整个插件见下文 |
 | `width_mode` | `default` | 卡片宽度：`default`、`compact`、`fill`；无效值回退为 `default` |
 | `panel_expanded` | `false` | 完成后保持思考、工具面板展开；`false` 表示完成后折叠 |
+| `split_content` | `false` | 推理/工具与正文分成独立卡片；两者切换时开新卡，footer 留在最后一张卡 |
 | `header.enabled` | `false` | 显示顶部状态标题 |
 | `body.text_size` | `normal_v2` | 正文 Markdown 字号，使用 CardKit 支持的字号标记 |
 | `footer.enabled` | `true` | 显示完成态页脚 |

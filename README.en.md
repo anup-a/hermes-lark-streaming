@@ -70,6 +70,7 @@ All keys below are relative to `platforms.feishu.extra.card`. Unset values use t
 | `enabled` | `true` | Enable native streaming cards; `false` disables streaming integration, not the entire plugin |
 | `width_mode` | `default` | `default`, `compact` or `fill`; invalid values fall back to `default` |
 | `panel_expanded` | `false` | Keep reasoning and tool panels expanded after completion; otherwise collapse them |
+| `split_content` | `false` | Put reasoning/tool work and answer text on separate cards; a new card starts whenever the turn switches between them, and the footer stays on the last card |
 | `header.enabled` | `false` | Show the status header |
 | `body.text_size` | `normal_v2` | Answer Markdown font size; use a CardKit-supported size token |
 | `footer.enabled` | `true` | Show the final footer |

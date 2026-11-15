@@ -79,6 +79,11 @@ class Config:
         return bool(display.get("show_tool_use", True))
 
     @property
+    def split_content(self) -> bool:
+        """推理/工具与正文是否分成独立卡片（card.split_content）."""
+        return bool(self._card_options().get("split_content", False))
+
+    @property
     def header_enabled(self) -> bool:
         """流式卡片和完成态卡片是否显示 header."""
         sec = self._card_options()
