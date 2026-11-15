@@ -70,6 +70,9 @@ All keys below are relative to `platforms.feishu.extra.card`. Unset values use t
 | `enabled` | `true` | Enable native streaming cards; `false` disables streaming integration, not the entire plugin |
 | `width_mode` | `default` | `default`, `compact` or `fill`; invalid values fall back to `default` |
 | `panel_expanded` | `false` | Keep reasoning and tool panels expanded after completion; otherwise collapse them |
+| `split_content` | `false` | Put reasoning/tool work and answer text on separate cards; a new card starts whenever the turn switches between them, and the footer stays on the last card |
+| `recover_orphans` | `false` | Keep a registry and periodic snapshot of open cards in `state/`; after a gateway crash or kill, the next turn replaces cards left on Processing with their last snapshot, marked Interrupted |
+| `rollover_minutes` | `0` | Feishu closes a card's streaming after about 10 minutes; past this age, seal the card with "Continued in the next card" and continue on a new one (`0` disables; `8` recommended) |
 | `header.enabled` | `false` | Show the status header |
 | `body.text_size` | `normal_v2` | Answer Markdown font size; use a CardKit-supported size token |
 | `footer.enabled` | `true` | Show the final footer |

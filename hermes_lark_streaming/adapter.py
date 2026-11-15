@@ -17,6 +17,7 @@ from .cardkit.builder import build_static_card
 from .config import DEFAULT_DOMAIN, LARK_DOMAIN, Config, hermes_home
 from .controller import StreamCardController
 from .feishu import FeishuClient, FeishuClientConfig
+from .streaming.image import ImageResolver
 
 _logger = logging.getLogger(__name__)
 ACTIVE: weakref.WeakSet[Any] = weakref.WeakSet()
@@ -116,8 +117,11 @@ class FeishuStreamingAdapter(builtin.FeishuAdapter):
             return await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
         anchor = reply_to or md.get("reply_to_message_id") or md.get("thread_id")
         try:
-            card = build_static_card(content)
             assert self.cards._client is not None
+            # Cron and background notices: render ```html blocks and upload images like live replies.
+            if "```html" in content or "![" in content:
+                content = await ImageResolver(self.cards._client, timeout=30.0).resolve_await(content)
+            card = build_static_card(content)
             message_id = await self.cards._client.send_card_to_chat(
                 chat_id,
                 card,

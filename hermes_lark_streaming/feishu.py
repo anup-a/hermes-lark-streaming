@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import logging
+import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -346,7 +347,10 @@ class FeishuClient:
 
         if data is None:
             return None
+        return await self.upload_image_bytes(data)
 
+    async def upload_image_bytes(self, data: bytes) -> str | None:
+        """上传内存中的图片（如渲染后的 HTML）到飞书，返回 img_key."""
         file = io.BytesIO(data)
         request = (
             CreateImageRequest.builder()
@@ -360,7 +364,18 @@ class FeishuClient:
 
     @staticmethod
     def _download_image(url: str, timeout: int = 15) -> bytes | None:
-        """同步下载图片（在线程池中运行）."""
+        """同步下载图片（在线程池中运行）. Local paths (/abs or file://) are read from disk."""
+        if url.startswith(("/", "file://")):
+            path = url[len("file://"):] if url.startswith("file://") else url
+            try:
+                if not os.path.isfile(path) or os.path.getsize(path) > 10 * 1024 * 1024:
+                    _logger.debug("local image missing or over 10 MB: %s", path)
+                    return None
+                with open(path, "rb") as f:
+                    return f.read()
+            except OSError:
+                _logger.debug("local image unreadable: %s", path)
+                return None
         try:
             req = Request(url, headers={"User-Agent": f"hermes-lark-streaming/{__version__}"})
             with urlopen(req, timeout=timeout) as resp:

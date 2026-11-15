@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from ..cardkit.builder import build_complete_card, build_streaming_card_v2
+from ..cardkit.i18n import _T
 from ..cardkit.markdown import (
     _downgrade_tables,
     optimize_markdown_style,
@@ -42,10 +45,29 @@ from .text import split_reasoning_text
 if TYPE_CHECKING:
     from ..config import Config
     from ..feishu import FeishuClient
+    from .open_cards import OpenCards
     from .session import CardSession
     from .tooluse import ToolDisplayStep
 
 _logger = logging.getLogger("hermes_lark_streaming")
+
+SNAPSHOT_INTERVAL_SEC = 5.0
+ORPHAN_MIN_AGE_SEC = 60.0
+
+
+def _note_segment(key: str) -> Segment:
+    """完成态卡片末尾的一行说明（按 Hermes 语言选择中英文）."""
+    en, zh = _T[key]
+    try:
+        from agent.i18n import get_language  # type: ignore[import-not-found]
+
+        text = zh if get_language().startswith("zh") else en
+    except Exception:
+        text = en
+    seg = Segment(SegmentType.ANSWER, f"note_{key}")
+    seg.text = text
+    seg.created = True
+    return seg
 
 
 async def _resolve_answer_images(
@@ -70,6 +92,79 @@ class StreamingController:
     _client: FeishuClient | None
     _cfg: Config
     _cleanup_session: Callable[[CardSession], None]
+    _open_cards: OpenCards | None = None
+
+    def _card_from_segments(
+        self, session: CardSession, segments: list[Segment], *, interrupted: bool = False,
+    ) -> dict[str, Any]:
+        return build_complete_card(
+            segments=segments,
+            all_tool_steps=session.tool_use.build_display_steps(),
+            footer_data=session.footer,
+            is_aborted=interrupted,
+            footer_fields=self._cfg.footer_fields,
+            footer_show_label=self._cfg.footer_show_label,
+            footer_enabled=self._cfg.footer_enabled,
+            footer_text_size=self._cfg.footer_text_size,
+            panel_expanded=self._cfg.panel_expanded,
+            header_enabled=self._cfg.header_enabled,
+            body_text_size=self._cfg.body_text_size,
+            show_tool_use=self._cfg.show_tool_use,
+            width_mode=self._cfg.width_mode,
+        )
+
+    def _register_card(self, session: CardSession) -> None:
+        if self._open_cards is not None and session.card_id:
+            self._open_cards.add(session.card_id, session.chat_id, session.message_id)
+
+    def _forget_card(self, card_id: str | None) -> None:
+        if self._open_cards is not None and card_id:
+            self._open_cards.remove(card_id)
+
+    def _maybe_snapshot(self, session: CardSession) -> None:
+        """定期保存「已中断」形态的整卡快照，供重启后的网关收尾."""
+        if self._open_cards is None or not session.card_id or session.state.is_terminal:
+            return
+        now = time.time()
+        if now - session.snapshot_at < SNAPSHOT_INTERVAL_SEC:
+            return
+        session.snapshot_at = now
+        try:
+            card = self._card_from_segments(
+                session, [*session.active_segments(), _note_segment("interrupted_note")], interrupted=True,
+            )
+        except Exception:
+            _logger.debug("open card snapshot build failed", exc_info=True)
+            return
+        self._open_cards.save_snapshot(session.card_id, card)
+
+    async def _sweep_orphans(self, live: set[str]) -> None:
+        """把旧网关遗留的「处理中」卡片整卡更新为已中断，保留快照里已显示的内容."""
+        if self._open_cards is None or self._client is None:
+            return
+        for card_id, entry in self._open_cards.orphans(live, min_age=ORPHAN_MIN_AGE_SEC):
+            card = entry.get("snapshot")
+            if not isinstance(card, dict):
+                card = build_complete_card(
+                    segments=[_note_segment("interrupted_note")],
+                    all_tool_steps=[],
+                    is_aborted=True,
+                    footer_enabled=False,
+                    header_enabled=self._cfg.header_enabled,
+                    width_mode=self._cfg.width_mode,
+                )
+            # 旧进程的序号已丢失；用当前秒数一定大于一轮里用过的序号
+            sequence = int(time.time())
+            try:
+                with contextlib.suppress(FeishuAPIError):  # 飞书通常已在 10 分钟后关闭流式
+                    await self._client.cardkit_close_streaming(card_id, sequence=sequence)
+                await self._client.cardkit_update(card_id, card, sequence=sequence + 1)
+            except Exception as exc:
+                _logger.warning("closing orphaned card failed: card=%s error=%s", card_id[:12], type(exc).__name__)
+                self._open_cards.attempted(card_id)
+            else:
+                self._open_cards.remove(card_id)
+                _logger.info("orphaned card marked interrupted: card=%s", card_id[:12])
 
     async def _cardkit_call(
         self, session: CardSession, operation: Callable[..., Awaitable[None]], *args: Any,
@@ -136,6 +231,7 @@ class StreamingController:
                         chat_id=session.chat_id, card={"type": "card", "data": {"card_id": card_id}},
                     )
             session.set_card(card_id=card_id, card_msg_id=card_msg_id)
+            self._register_card(session)
             session.element_count = 1  # loading element
             session.flush.set_throttle(CARDKIT_MS)
 
@@ -173,6 +269,28 @@ class StreamingController:
 
         assert self._client is not None
         segments = segment_state.segments
+        if not await self._maybe_rollover(session, segments):
+            return
+        try:
+            await self._flush_segments(session, segment_state, segments)
+        finally:
+            self._maybe_snapshot(session)
+
+    async def _maybe_rollover(self, session: CardSession, segments: list[Segment]) -> bool:
+        """飞书约 10 分钟关闭流式；到期前把仍在增长的最后一段移到新卡，旧卡封存并注明下接。返回 False 表示中断 flush."""
+        limit = self._cfg.rollover_seconds
+        if not limit or session.split_disabled or time.time() - session.card_opened_at < limit:
+            return True
+        split_idx = len(segments) - 1
+        if split_idx <= session.split_index or not any(s.created for s in segments[session.split_index:split_idx]):
+            return True
+        _logger.info("CardKit rollover: msg=%s card=%s age=%.0fs", session.message_id[:12],
+                     (session.card_id or "")[:12], time.time() - session.card_opened_at)
+        return await self._do_split_card(session, split_idx, [], set(), {}, [], continued=True)
+
+    async def _flush_segments(self, session: CardSession, segment_state: SegmentState, segments: list[Segment]) -> None:
+        assert self._client is not None
+        assert session.card_id is not None
         all_steps = session.tool_use.build_display_steps()
         show_tool_use = self._cfg.show_tool_use
 
@@ -196,6 +314,20 @@ class StreamingController:
                 continue
 
             if not seg.created:
+                if self._cfg.split_content and not session.split_disabled:
+                    if seg.type == SegmentType.ANSWER and not seg.text.strip():
+                        continue
+                    if self._content_kind_changes(session, segments, i, new_el_ids, show_tool_use):
+                        split_ok = await self._do_split_card(
+                            session, i, actions, new_el_ids, new_el_estimates, updated_tool_segs,
+                        )
+                        if not split_ok:
+                            return
+                        actions = []
+                        new_el_ids = set()
+                        new_el_estimates = {}
+                        updated_tool_segs = []
+                        new_el_total = 0
                 estimated = estimate_segment_elements(seg, all_steps)
                 if (
                     seg.type == SegmentType.TOOL
@@ -339,6 +471,24 @@ class StreamingController:
                 if session.guard.terminate("stream_element", e):
                     return
                 _logger.debug("CardKit stream element failed: %s el=%s", e, seg.el_id, exc_info=True)
+
+    @staticmethod
+    def _content_kind_changes(
+        session: CardSession,
+        segments: list[Segment],
+        index: int,
+        pending_ids: set[str],
+        show_tool_use: bool,
+    ) -> bool:
+        """当前卡片最后一个可见段与新段在「过程 / 正文」之间切换时返回 True."""
+        is_answer = segments[index].type == SegmentType.ANSWER
+        for prev in reversed(segments[session.split_index:index]):
+            if prev.type == SegmentType.TOOL and not show_tool_use:
+                continue
+            if not (prev.created or prev.el_id in pending_ids):
+                continue
+            return (prev.type == SegmentType.ANSWER) != is_answer
+        return False
 
     async def _do_batch_update(
         self,
@@ -494,6 +644,8 @@ class StreamingController:
         self,
         session: CardSession,
         seal_segments: list[Segment],
+        *,
+        continued: bool = False,
     ) -> None:
         """关闭当前卡的流式模式并封存内容，拆卡后继续使用新卡."""
         assert self._client is not None
@@ -507,6 +659,8 @@ class StreamingController:
                 log_prefix="CardKit seal",
             )
         all_steps = session.tool_use.build_display_steps()
+        if continued:
+            seal_segments = [*seal_segments, _note_segment("continued_note")]
         seal_card = build_complete_card(
             segments=seal_segments,
             all_tool_steps=all_steps,
@@ -567,6 +721,8 @@ class StreamingController:
         new_el_ids: set[str],
         new_el_estimates: dict[str, int],
         updated_tool_segs: list[Segment],
+        *,
+        continued: bool = False,
     ) -> bool:
         """拆卡：先 flush pending actions，封旧卡，创建新卡。返回 False 表示失败需中断 flush."""
         assert self._client is not None
@@ -589,10 +745,12 @@ class StreamingController:
             session.split_disabled = True  # 降级：继续写当前卡
             return True
 
-        await self._seal_current_card(session, seal_segments)
+        await self._seal_current_card(session, seal_segments, continued=continued)
+        self._forget_card(old_card_id)
 
         new_card_id, new_msg_id = new_card
         session.set_card(card_id=new_card_id, card_msg_id=new_msg_id)
+        self._register_card(session)
         session.element_count = 1  # loading element
         session.sequence = 1  # 新卡从 1 重新计数
         session.split_disabled = False
@@ -631,6 +789,10 @@ class StreamingController:
             return False
 
         await session.flush.wait_for_flush()
+        if self._cfg.split_content and not session.state.is_terminal:
+            # 最后一段正文可能还没 flush，先拆卡，避免完成态把它并入过程卡。
+            # 必须经 flush_now 走互斥锁，否则与定时 flush 并发会重复拆卡。
+            await session.flush.flush_now(lambda: self._do_flush(session))
         session.flush.mark_completed()
 
         segment_state = session.segment_state
@@ -679,6 +841,7 @@ class StreamingController:
                         card,
                     )
                 session.state = SessionState.COMPLETED
+                self._forget_card(session.card_id)
                 return True
             except FeishuAPIError as e:
                 _logger.warning(
