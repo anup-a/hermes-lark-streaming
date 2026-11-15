@@ -16,7 +16,10 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger("hermes_lark_streaming")
 
-_IMG_PATTERN = re.compile(r"!\[.*?\]\((https?://[^\s)]+)\)")
+# Remote URLs, plus local image files (absolute path or file://) such as screenshots the agent made.
+_IMG_PATTERN = re.compile(
+    r"!\[.*?\]\((https?://[^\s)]+|(?:file://)?/[^\s)]+\.(?:png|jpe?g|gif|webp|bmp))\)", re.I
+)
 # Lark cards cannot render HTML: ```html blocks are rendered to an image instead.
 _HTML_BLOCK = re.compile(r"```html[ \t]*\n(.*?)```", re.S)
 _HTML_OPEN = re.compile(r"```html[ \t]*\n(?:(?!```).)*\Z", re.S)  # still streaming in
