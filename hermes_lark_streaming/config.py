@@ -84,6 +84,24 @@ class Config:
         return bool(self._card_options().get("split_content", False))
 
     @property
+    def recover_orphans(self) -> bool:
+        """网关重启后把遗留的「处理中」卡片收尾为「已中断」（card.recover_orphans）."""
+        return bool(self._card_options().get("recover_orphans", False))
+
+    @property
+    def rollover_seconds(self) -> float:
+        """卡片流式超过该秒数时换新卡（card.rollover_minutes，0 关闭；飞书约 10 分钟关闭流式）."""
+        try:
+            minutes = float(self._card_options().get("rollover_minutes", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(minutes, 0.0) * 60
+
+    @property
+    def state_dir(self) -> Path:
+        return self._home / "state"
+
+    @property
     def header_enabled(self) -> bool:
         """流式卡片和完成态卡片是否显示 header."""
         sec = self._card_options()

@@ -73,6 +73,8 @@ display:
 | `width_mode` | `default` | 卡片宽度：`default`、`compact`、`fill`；无效值回退为 `default` |
 | `panel_expanded` | `false` | 完成后保持思考、工具面板展开；`false` 表示完成后折叠 |
 | `split_content` | `false` | 推理/工具与正文分成独立卡片；两者切换时开新卡，footer 留在最后一张卡 |
+| `recover_orphans` | `false` | 在 `state/` 登记流式中的卡片并定期保存快照；网关崩溃或被杀后，下一轮把遗留的「处理中」卡片换成最后快照并标记已中断 |
+| `rollover_minutes` | `0` | 飞书约 10 分钟关闭流式；卡片超过该时长时封存旧卡（注明内容见下一张）并换新卡（`0` 关闭，建议 `8`） |
 | `header.enabled` | `false` | 显示顶部状态标题 |
 | `body.text_size` | `normal_v2` | 正文 Markdown 字号，使用 CardKit 支持的字号标记 |
 | `footer.enabled` | `true` | 显示完成态页脚 |

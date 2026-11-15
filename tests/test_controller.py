@@ -416,3 +416,112 @@ async def test_split_content_completion_does_not_race_scheduled_flush(split_cont
     await c.frame("t", "chat", "answer", reply_to="in", source_id="in", finalize=True)
     await asyncio.sleep(1.0)
     assert c._client.cardkit_create.await_count == 2
+
+
+def _registry(tmp_path):
+    import json
+
+    path = tmp_path / "state" / "hermes-lark-streaming-open-cards.json"
+    return json.loads(path.read_text())["cards"] if path.exists() else {}
+
+
+@pytest.fixture
+def recover_controller(tmp_path):
+    cfg = Config(tmp_path, extra={"card": {"recover_orphans": True}})
+    client = create_autospec(FeishuClient, instance=True)
+    client.cardkit_create.side_effect = [f"card-{n}" for n in range(1, 10)]
+    client.reply_card_by_id.return_value = "message"
+    client.send_card_to_chat.return_value = "message"
+    return StreamCardController(cfg, client)
+
+
+@pytest.mark.asyncio
+async def test_open_card_is_registered_snapshotted_and_forgotten(recover_controller, tmp_path):
+    c = recover_controller
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    session = c.turns["t"].session
+    assert "card-1" in _registry(tmp_path)
+    await c.frame("t", "chat", "partial-answer-marker", reply_to="in", source_id="in")
+    await c._do_flush(session)
+    snapshot = str(_registry(tmp_path)["card-1"]["snapshot"])
+    assert "partial-answer-marker" in snapshot and "Interrupted" in snapshot
+    await c.frame("t", "chat", "partial-answer-marker", reply_to="in", source_id="in", finalize=True)
+    assert _registry(tmp_path) == {}
+
+
+@pytest.mark.asyncio
+async def test_orphaned_card_from_dead_gateway_is_marked_interrupted(recover_controller, tmp_path):
+    import json
+    import time
+
+    snapshot = {"schema": "2.0", "body": {"elements": [{"tag": "markdown", "content": "kept-content-marker"}]}}
+    path = tmp_path / "state" / "hermes-lark-streaming-open-cards.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"cards": {
+        "old-card": {"chat_id": "chat", "message_id": "m", "opened_at": time.time() - 600, "snapshot": snapshot},
+        "young-card": {"chat_id": "chat", "message_id": "m", "opened_at": time.time()},
+    }}))
+    c = recover_controller
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    await c._sweep_task
+    updated = {call.args[0]: call.args[1] for call in c._client.cardkit_update.await_args_list}
+    assert updated["old-card"] == snapshot
+    assert c._client.cardkit_update.await_args_list[0].kwargs["sequence"] > 1_000_000_000
+    assert "young-card" not in updated
+    assert set(_registry(tmp_path)) == {"young-card", "card-1"}
+
+
+@pytest.mark.asyncio
+async def test_failed_orphan_close_is_retried_then_dropped(recover_controller, tmp_path):
+    import json
+    import time
+
+    path = tmp_path / "state" / "hermes-lark-streaming-open-cards.json"
+    path.parent.mkdir(parents=True)
+    entry = {"chat_id": "c", "message_id": "m", "opened_at": time.time() - 600}
+    path.write_text(json.dumps({"cards": {"gone": entry}}))
+    c = recover_controller
+    c._client.cardkit_update.side_effect = FeishuAPIError("deleted", code=200740)
+    for _ in range(3):
+        await c._sweep_orphans(set())
+    assert "gone" not in _registry(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_rollover_moves_growing_segment_to_new_card_with_continued_note(tmp_path):
+    cfg = Config(tmp_path, extra={"card": {"rollover_minutes": 8}})
+    client = create_autospec(FeishuClient, instance=True)
+    client.cardkit_create.side_effect = [f"card-{n}" for n in range(1, 10)]
+    client.reply_card_by_id.return_value = "message"
+    c = StreamCardController(cfg, client)
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    session = c.turns["t"].session
+    await _tool(c, "one", "early-tool-marker")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "growing-answer-marker", reply_to="in", source_id="in")
+    await c._do_flush(session)
+    assert client.cardkit_create.await_count == 1
+    session.card_opened_at -= 9 * 60
+    await c.frame("t", "chat", "growing-answer-marker more", reply_to="in", source_id="in")
+    await c._do_flush(session)
+    assert client.cardkit_create.await_count == 2
+    sealed = str(client.cardkit_update.await_args_list[-1].args[1])
+    assert client.cardkit_update.await_args_list[-1].args[0] == "card-1"
+    assert "early-tool-marker" in sealed and "Continued in the next card" in sealed
+    assert "growing-answer-marker" not in sealed
+    await c.frame("t", "chat", "growing-answer-marker more", reply_to="in", source_id="in", finalize=True)
+    final = str(client.cardkit_update.await_args_list[-1].args[1])
+    assert client.cardkit_update.await_args_list[-1].args[0] == "card-2"
+    assert "growing-answer-marker more" in final
+
+
+@pytest.mark.asyncio
+async def test_rollover_off_by_default_keeps_one_card(controller):
+    c = controller
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    session = c.turns["t"].session
+    await _tool(c, "one", "ls")
+    await c._do_flush(session)
+    session.card_opened_at -= 60 * 60
+    await c.frame("t", "chat", "answer", reply_to="in", source_id="in", finalize=True)
+    assert c._client.cardkit_create.await_count == 1

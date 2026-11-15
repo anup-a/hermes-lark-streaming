@@ -40,6 +40,7 @@ class CardSession:
         "anchor_id",
         "card_id",
         "card_msg_id",
+        "card_opened_at",
         "chat_id",
         "created_at",
         "element_count",
@@ -51,6 +52,7 @@ class CardSession:
         "segment_state",
         "sequence",
         "session_key",
+        "snapshot_at",
         "split_disabled",
         "split_index",
         "state",
@@ -70,6 +72,8 @@ class CardSession:
         self.state = SessionState.IDLE
         self.card_msg_id: str | None = None
         self.card_id: str | None = None
+        self.card_opened_at = 0.0
+        self.snapshot_at = 0.0
         self.tool_use = ToolUseTracker()
         self.flush = FlushController(throttle_ms=CARDKIT_MS, loop=loop)
         self.footer: dict[str, Any] = {}
@@ -95,6 +99,8 @@ class CardSession:
     def set_card(self, *, card_id: str, card_msg_id: str) -> None:
         self.card_id = card_id
         self.card_msg_id = card_msg_id
+        self.card_opened_at = time.time()
+        self.snapshot_at = 0.0
 
     def mark_failed(self) -> None:
         self.state = SessionState.FAILED

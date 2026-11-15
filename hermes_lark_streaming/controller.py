@@ -16,11 +16,14 @@ from .cardkit.i18n import _t
 from .config import Config
 from .feishu import FeishuClient
 from .streaming.controller import StreamingController
+from .streaming.open_cards import OPEN_CARDS_FILE, OpenCards
 from .streaming.segments import Segment, SegmentType
 from .streaming.session import CardSession, SessionState
 from .streaming.tooluse import ToolStatus, ToolStep, redact_inline_secrets
 
 _logger = logging.getLogger(__name__)
+
+SWEEP_INTERVAL_SEC = 300.0
 
 
 @dataclass
@@ -45,6 +48,20 @@ class StreamCardController(StreamingController):
         self.turns: dict[str, Turn] = {}
         self._finished: OrderedDict[str, tuple[bool, bool]] = OrderedDict()
         self._pending_tools: OrderedDict[int, Turn] = OrderedDict()
+        self._open_cards = OpenCards(config.state_dir / OPEN_CARDS_FILE) if config.recover_orphans else None
+        self._swept_at: float | None = None
+        self._sweep_task: asyncio.Task[None] | None = None
+
+    def _maybe_sweep(self) -> None:
+        """新回合开始时（首次及之后每 5 分钟）后台收尾旧网关遗留的卡片."""
+        if self._open_cards is None or (self._sweep_task is not None and not self._sweep_task.done()):
+            return
+        now = time.monotonic()
+        if self._swept_at is not None and now - self._swept_at < SWEEP_INTERVAL_SEC:
+            return
+        self._swept_at = now
+        live = {t.session.card_id for t in self.turns.values() if t.session.card_id}
+        self._sweep_task = asyncio.get_running_loop().create_task(self._sweep_orphans(live))
 
     def _cleanup_session(self, session: CardSession) -> None:
         session.flush.mark_completed()
@@ -70,6 +87,7 @@ class StreamCardController(StreamingController):
                 return self._finished[key][0]
         turn = self.turns.get(key)
         if turn is None:
+            self._maybe_sweep()
             session = CardSession(source_id, chat_id, asyncio.get_running_loop())
             session.session_key = session_key
             session.anchor_id = reply_to

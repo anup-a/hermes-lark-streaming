@@ -27,6 +27,11 @@ _T: dict[str, tuple[str, str]] = {
     "done": ("Done.", "完成。"),
     "clarify_answered": ("💬 Received your choice", "💬 已收到你的选择"),
     "clarify_ended": ("💬 Clarification ended", "💬 本次澄清已结束"),
+    "interrupted_note": (
+        "_⚠️ Interrupted: the gateway restarted before this turn finished._",
+        "_⚠️ 已中断: 本轮结束前网关重启了。_",
+    ),
+    "continued_note": ("_↓ Continued in the next card_", "_↓ 内容见下一张卡片_"),
 }
 
 
