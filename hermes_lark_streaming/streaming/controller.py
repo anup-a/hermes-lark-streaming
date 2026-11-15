@@ -314,20 +314,6 @@ class StreamingController:
                 continue
 
             if not seg.created:
-                if self._cfg.split_content and not session.split_disabled:
-                    if seg.type == SegmentType.ANSWER and not seg.text.strip():
-                        continue
-                    if self._content_kind_changes(session, segments, i, new_el_ids, show_tool_use):
-                        split_ok = await self._do_split_card(
-                            session, i, actions, new_el_ids, new_el_estimates, updated_tool_segs,
-                        )
-                        if not split_ok:
-                            return
-                        actions = []
-                        new_el_ids = set()
-                        new_el_estimates = {}
-                        updated_tool_segs = []
-                        new_el_total = 0
                 estimated = estimate_segment_elements(seg, all_steps)
                 if (
                     seg.type == SegmentType.TOOL
@@ -472,23 +458,19 @@ class StreamingController:
                     return
                 _logger.debug("CardKit stream element failed: %s el=%s", e, seg.el_id, exc_info=True)
 
-    @staticmethod
-    def _content_kind_changes(
-        session: CardSession,
-        segments: list[Segment],
-        index: int,
-        pending_ids: set[str],
-        show_tool_use: bool,
-    ) -> bool:
-        """当前卡片最后一个可见段与新段在「过程 / 正文」之间切换时返回 True."""
-        is_answer = segments[index].type == SegmentType.ANSWER
-        for prev in reversed(segments[session.split_index:index]):
-            if prev.type == SegmentType.TOOL and not show_tool_use:
-                continue
-            if not (prev.created or prev.el_id in pending_ids):
-                continue
-            return (prev.type == SegmentType.ANSWER) != is_answer
-        return False
+    def _split_final_answer(self, segments: list[Segment]) -> int | None:
+        """split_content：返回末尾连续正文段的起点；前面没有可见的推理/工具时返回 None（单卡）."""
+        start = len(segments)
+        while start > 0 and segments[start - 1].type == SegmentType.ANSWER:
+            start -= 1
+        tail = segments[start:]
+        if not any(seg.text.strip() for seg in tail):
+            return None
+        has_work = any(
+            seg.type == SegmentType.REASONING or (seg.type == SegmentType.TOOL and self._cfg.show_tool_use)
+            for seg in segments[:start]
+        )
+        return start if has_work else None
 
     async def _do_batch_update(
         self,
@@ -672,6 +654,7 @@ class StreamingController:
             body_text_size=self._cfg.body_text_size,
             show_tool_use=self._cfg.show_tool_use,
             width_mode=self._cfg.width_mode,
+            done_placeholder=False,
         )
         try:
             await self._cardkit_call(session, self._client.cardkit_close_streaming, old_card_id)
@@ -690,6 +673,19 @@ class StreamingController:
         return await self._client.send_card_to_chat(
             chat_id=session.chat_id, card={"type": "card", "data": {"card_id": card_id}},
         )
+
+    async def _send_answer_card(self, session: CardSession, card: dict[str, Any]) -> bool:
+        """split_content：把最终正文作为一张完成态卡片发到过程卡下方."""
+        assert self._client is not None
+        try:
+            card_id = await self._client.cardkit_create(card)
+            await self._send_card_reference(session, card_id)
+        except Exception:
+            _logger.warning("CardKit answer card failed for msg=%s; keeping one card",
+                            session.message_id[:12], exc_info=True)
+            return False
+        _logger.info("CardKit answer card: msg=%s card=%s", session.message_id[:12], card_id[:12])
+        return True
 
     async def _create_streaming_card(self, session: CardSession) -> tuple[str, str] | None:
         """创建空白流式卡并挂到 anchor，返回 (card_id, msg_id)。失败返回 None。
@@ -789,10 +785,6 @@ class StreamingController:
             return False
 
         await session.flush.wait_for_flush()
-        if self._cfg.split_content and not session.state.is_terminal:
-            # 最后一段正文可能还没 flush，先拆卡，避免完成态把它并入过程卡。
-            # 必须经 flush_now 走互斥锁，否则与定时 flush 并发会重复拆卡。
-            await session.flush.flush_now(lambda: self._do_flush(session))
         session.flush.mark_completed()
 
         segment_state = session.segment_state
@@ -811,22 +803,36 @@ class StreamingController:
                 log_prefix="CardKit",
             )
 
-        card = build_complete_card(
-            segments=active_segments,
-            all_tool_steps=all_tool_steps,
-            footer_data=session.footer,
-            is_error=is_error,
-            is_aborted=is_aborted,
-            footer_fields=self._cfg.footer_fields,
-            footer_show_label=self._cfg.footer_show_label,
-            footer_enabled=self._cfg.footer_enabled,
-            footer_text_size=self._cfg.footer_text_size,
-            panel_expanded=self._cfg.panel_expanded,
-            header_enabled=self._cfg.header_enabled,
-            body_text_size=self._cfg.body_text_size,
-            show_tool_use=self._cfg.show_tool_use,
-            width_mode=self._cfg.width_mode,
+        def complete_card(segments: list[Segment], *, footer: bool = True, done: bool = True) -> dict[str, Any]:
+            return build_complete_card(
+                segments=segments,
+                all_tool_steps=all_tool_steps,
+                footer_data=session.footer,
+                is_error=is_error,
+                is_aborted=is_aborted,
+                footer_fields=self._cfg.footer_fields,
+                footer_show_label=self._cfg.footer_show_label,
+                footer_enabled=self._cfg.footer_enabled and footer,
+                footer_text_size=self._cfg.footer_text_size,
+                panel_expanded=self._cfg.panel_expanded,
+                header_enabled=self._cfg.header_enabled,
+                body_text_size=self._cfg.body_text_size,
+                show_tool_use=self._cfg.show_tool_use,
+                width_mode=self._cfg.width_mode,
+                done_placeholder=done,
+            )
+
+        card = complete_card(active_segments)
+        # split_content：过程卡收尾时去掉末尾正文，正文另起一张带页脚的卡（出错/中断时保持单卡）
+        answer_card: dict[str, Any] | None = None
+        split_at = (
+            self._split_final_answer(active_segments)
+            if self._cfg.split_content and not (is_error or is_aborted) else None
         )
+        if split_at is not None:
+            card = complete_card(active_segments[:split_at], footer=False, done=False)
+            if not session.answer_sent:  # 工具结果晚到时会再次完成：正文卡只发一次
+                answer_card = complete_card(active_segments[split_at:])
 
         streaming_closed = session.state == SessionState.COMPLETED
         for attempt in range(3):
@@ -836,6 +842,12 @@ class StreamingController:
                     if not streaming_closed:
                         await self._cardkit_call(session, self._client.cardkit_close_streaming, session.card_id)
                         streaming_closed = True
+                    if answer_card is not None:
+                        if await self._send_answer_card(session, answer_card):
+                            session.answer_sent = True
+                        else:
+                            card = complete_card(active_segments)  # 正文卡发不出去：保持单卡，内容不丢
+                        answer_card = None  # 重试时不重复发送
                     await self._cardkit_call(
                         session, self._client.cardkit_update, session.card_id,
                         card,

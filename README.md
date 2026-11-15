@@ -7,6 +7,20 @@
 
 ![Hermes Lark Streaming](assets/cover.jpg)
 
+> **This is Anup Aglawe's fork** of [Cheerwhy/hermes-lark-streaming](https://github.com/Cheerwhy/hermes-lark-streaming).
+> It runs Zex's Lark replies. Branch `anup/main` is upstream plus the changes below, all behind
+> `platforms.feishu.extra.card.*` options that are **off by default**. See [FORK.md](FORK.md) for
+> branches and how we sync with upstream.
+>
+> | Option | What it does |
+> |---|---|
+> | `split_content: true` | Two cards per turn: one work card (reasoning, tool calls and in-between notes, no "Done.") and one answer card with the final reply and the footer. The reply streams on the work card and moves to its own card when the turn ends. Errors, stops and plain text replies stay on one card. |
+> | `recover_orphans: true` | Keeps a registry and 5 s snapshots of open cards in `state/`. After a gateway crash or kill, the next turn replaces cards left on "Processing..." with their last snapshot, marked Interrupted. |
+> | `rollover_minutes: 8` | Feishu stops a card's streaming after about 10 minutes. Past this age the card is sealed with "Continued in the next card" and the turn carries on in a new one. |
+> | HTML and images | HTML code blocks and local image files render into cards (T3 theme, layout sheet, `html-preview` CLI). |
+>
+> Ideas for `recover_orphans` and `rollover_minutes` come from [wzgrx/hermes-lark-streaming](https://github.com/wzgrx/hermes-lark-streaming).
+
 Hermes 飞书 / Lark CardKit 2.0 流式卡片插件。0.14.0 起通过 Hermes 原生平台接口接入，在 Gateway 进程内运行。
 
 - 保留内置飞书的连接、用户权限、配对、群策略、附件、话题和审批
@@ -72,7 +86,7 @@ display:
 | `enabled` | `true` | 启用原生流式卡片；`false` 仅关闭流式接管，停用整个插件见下文 |
 | `width_mode` | `default` | 卡片宽度：`default`、`compact`、`fill`；无效值回退为 `default` |
 | `panel_expanded` | `false` | 完成后保持思考、工具面板展开；`false` 表示完成后折叠 |
-| `split_content` | `false` | 推理/工具与正文分成独立卡片；两者切换时开新卡，footer 留在最后一张卡 |
+| `split_content` | `false` | 每轮两张卡：过程卡（推理、工具、中途说明）与最终正文卡（含 footer）；回合结束时正文移到独立卡片 |
 | `recover_orphans` | `false` | 在 `state/` 登记流式中的卡片并定期保存快照；网关崩溃或被杀后，下一轮把遗留的「处理中」卡片换成最后快照并标记已中断 |
 | `rollover_minutes` | `0` | 飞书约 10 分钟关闭流式；卡片超过该时长时封存旧卡（注明内容见下一张）并换新卡（`0` 关闭，建议 `8`） |
 | `header.enabled` | `false` | 显示顶部状态标题 |

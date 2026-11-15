@@ -435,8 +435,9 @@ def build_complete_card(
     body_text_size: str = "normal_v2",
     show_tool_use: bool = True,
     width_mode: str = "default",
+    done_placeholder: bool = True,
 ) -> dict[str, Any]:
-    """完成态流式卡片 — 按 segments 顺序渲染."""
+    """完成态流式卡片 — 按 segments 顺序渲染；done_placeholder=False 时无正文也不补「完成。」."""
     elements: list[dict] = []
     has_answer = False
 
@@ -461,7 +462,7 @@ def build_complete_card(
             for chunk in _split_long_text(content):
                 elements.append({"tag": "markdown", "content": chunk, "text_size": body_text_size})
 
-    if not has_answer:
+    if not has_answer and done_placeholder:
         elements.append({"tag": "markdown", "content": _T["done"][0], "text_size": body_text_size})
 
     if footer_enabled:

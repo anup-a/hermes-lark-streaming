@@ -7,6 +7,20 @@
 
 ![Hermes Lark Streaming](assets/cover.jpg)
 
+> **This is Anup Aglawe's fork** of [Cheerwhy/hermes-lark-streaming](https://github.com/Cheerwhy/hermes-lark-streaming).
+> It runs Zex's Lark replies. Branch `anup/main` is upstream plus the changes below, all behind
+> `platforms.feishu.extra.card.*` options that are **off by default**. See [FORK.md](FORK.md) for
+> branches and how we sync with upstream.
+>
+> | Option | What it does |
+> |---|---|
+> | `split_content: true` | Two cards per turn: one work card (reasoning, tool calls and in-between notes, no "Done.") and one answer card with the final reply and the footer. The reply streams on the work card and moves to its own card when the turn ends. Errors, stops and plain text replies stay on one card. |
+> | `recover_orphans: true` | Keeps a registry and 5 s snapshots of open cards in `state/`. After a gateway crash or kill, the next turn replaces cards left on "Processing..." with their last snapshot, marked Interrupted. |
+> | `rollover_minutes: 8` | Feishu stops a card's streaming after about 10 minutes. Past this age the card is sealed with "Continued in the next card" and the turn carries on in a new one. |
+> | HTML and images | HTML code blocks and local image files render into cards (T3 theme, layout sheet, `html-preview` CLI). |
+>
+> Ideas for `recover_orphans` and `rollover_minutes` come from [wzgrx/hermes-lark-streaming](https://github.com/wzgrx/hermes-lark-streaming).
+
 Feishu/Lark CardKit 2.0 streaming cards for **Hermes >= 0.22.0**.
 
 Version 0.14.0 uses Hermes's native platform registry and stream frame contract. It subclasses the built-in Feishu adapter and keeps the `feishu` platform identity, credentials, authorization, sessions, threads and cron targets. Everything runs inside the Gateway process: no source patches, AST rewriting, monkey-patching or sidecar.
@@ -70,7 +84,7 @@ All keys below are relative to `platforms.feishu.extra.card`. Unset values use t
 | `enabled` | `true` | Enable native streaming cards; `false` disables streaming integration, not the entire plugin |
 | `width_mode` | `default` | `default`, `compact` or `fill`; invalid values fall back to `default` |
 | `panel_expanded` | `false` | Keep reasoning and tool panels expanded after completion; otherwise collapse them |
-| `split_content` | `false` | Put reasoning/tool work and answer text on separate cards; a new card starts whenever the turn switches between them, and the footer stays on the last card |
+| `split_content` | `false` | Two cards per turn: work (reasoning, tools, interim notes) and the final answer with the footer; the answer moves to its own card when the turn ends |
 | `recover_orphans` | `false` | Keep a registry and periodic snapshot of open cards in `state/`; after a gateway crash or kill, the next turn replaces cards left on Processing with their last snapshot, marked Interrupted |
 | `rollover_minutes` | `0` | Feishu closes a card's streaming after about 10 minutes; past this age, seal the card with "Continued in the next card" and continue on a new one (`0` disables; `8` recommended) |
 | `header.enabled` | `false` | Show the status header |

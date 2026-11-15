@@ -13,7 +13,7 @@ running as the live Feishu card plugin for his Hermes agent (Zex).
 ## Our changes on top of upstream
 
 - HTML code blocks and local images rendered into cards (T3 theme, layout sheet, `html-preview` CLI)
-- `card.split_content`: reasoning/tool work and answer text on separate cards
+- `card.split_content`: two cards per turn, work and final answer (the answer moves to its own card when the turn ends)
 - `card.recover_orphans`: cards left on Processing by a killed gateway are restored from a snapshot and marked Interrupted (idea from wzgrx/hermes-lark-streaming)
 - `card.rollover_minutes`: roll over to a new card before Feishu's ~10 min streaming limit (idea from wzgrx)
 
