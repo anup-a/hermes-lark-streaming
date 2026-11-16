@@ -643,3 +643,42 @@ class TestCompleteCardFooter:
         )
         tags = [e.get("tag") for e in card["body"]["elements"]]
         assert "hr" not in tags
+
+
+class TestConclusionHeader:
+    def _title(self, segments: list[Segment], **kw: object) -> str:
+        card = build_complete_card(
+            segments=segments, all_tool_steps=[], header_enabled=True,
+            header_title="conclusion", **kw,  # type: ignore[arg-type]
+        )
+        return str(card["header"]["title"]["content"])
+
+    def test_first_line_of_final_answer(self) -> None:
+        segs = [
+            _seg("answer", "Checking the branches now."),
+            _seg("tool"),
+            _seg("answer", "## **Merged** `feat/x` into [dev-pre](http://x)\n\n- details"),
+        ]
+        assert self._title(segs) == "✅ Merged feat/x into dev-pre"
+
+    def test_long_line_cut_at_sentence(self) -> None:
+        text = "Done: the feature branch is merged and pushed. " + "More words " * 20
+        assert self._title([_seg("answer", text)]) == "✅ Done: the feature branch is merged and pushed."
+
+    def test_long_line_without_sentence_truncated(self) -> None:
+        title = self._title([_seg("answer", "word " * 40)])
+        assert title.endswith("…") and len(title) <= 82
+
+    def test_skips_code_and_tables(self) -> None:
+        segs = [_seg("answer", "```bash\nls\n```\n| a | b |\n---\nReal line here")]
+        assert self._title(segs) == "✅ Real line here"
+
+    def test_falls_back_without_answer(self) -> None:
+        assert "Completed" in self._title([_seg("tool")], done_placeholder=False)
+
+    def test_error_keeps_status(self) -> None:
+        assert "Error" in self._title([_seg("answer", "Something")], is_error=True)
+
+    def test_default_keeps_completed(self) -> None:
+        card = build_complete_card(segments=[_seg("answer", "Hi")], all_tool_steps=[], header_enabled=True)
+        assert "Completed" in card["header"]["title"]["content"]

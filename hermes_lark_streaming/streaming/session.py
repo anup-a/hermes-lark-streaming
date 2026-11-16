@@ -38,6 +38,7 @@ class CardSession:
 
     __slots__ = (
         "anchor_id",
+        "answer_sent",
         "card_id",
         "card_msg_id",
         "card_opened_at",
@@ -67,6 +68,7 @@ class CardSession:
     ) -> None:
         self.message_id = message_id
         self.anchor_id: str | None = None
+        self.answer_sent = False
         self.chat_id = chat_id
         self.session_key: str | None = None
         self.state = SessionState.IDLE

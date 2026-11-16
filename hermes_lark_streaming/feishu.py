@@ -33,6 +33,7 @@ from lark_oapi.api.im.v1 import (
     CreateImageRequestBody,
     CreateMessageRequest,
     CreateMessageRequestBody,
+    DeleteMessageRequest,
     PatchMessageRequest,
     PatchMessageRequestBody,
     ReplyMessageRequest,
@@ -163,6 +164,11 @@ class FeishuClient:
                 await asyncio.sleep(delay)
         assert last_error is not None
         raise last_error
+
+    async def delete_message(self, message_id: str) -> None:
+        """撤回机器人自己发出的消息."""
+        request = DeleteMessageRequest.builder().message_id(message_id).build()
+        await self._checked_call("delete_message", lambda: self._client.im.v1.message.adelete(request))
 
     async def update_card_message(self, message_id: str, card: dict[str, Any]) -> None:
         """通过卡片专用 PATCH 接口更新消息，不能使用文本消息的 PUT 接口."""

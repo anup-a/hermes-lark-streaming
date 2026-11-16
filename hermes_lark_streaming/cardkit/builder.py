@@ -77,10 +77,12 @@ _HEADER_STATES: dict[str, dict[str, str]] = {
 }
 
 
-def _build_header(status: str) -> dict[str, Any]:
-    """构建卡片级 header — 流式蓝 / 完成绿 / 停止红."""
+def _build_header(status: str, conclusion: str = "") -> dict[str, Any]:
+    """构建卡片级 header — 流式蓝 / 完成绿 / 停止红；完成态可用正文结论替换「已完成」."""
     cfg = _HEADER_STATES.get(status, _HEADER_STATES["completed"])
     en_text, zh_text = _T[cfg["i18n_key"]]
+    if status == "completed" and conclusion:
+        en_text = zh_text = f"✅ {conclusion}"
     return {
         "title": {
             "tag": "plain_text",
@@ -89,6 +91,41 @@ def _build_header(status: str) -> dict[str, Any]:
         },
         "template": cfg["template"],
     }
+
+
+_CONCLUSION_MAX = 80
+_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_TAG_RE = re.compile(r"<[^>]+>")
+_LEAD_RE = re.compile(r"^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+")
+
+
+def _conclusion(segments: list[Segment]) -> str:
+    """最终正文（最后一段连续 ANSWER）的第一行有效文字，去掉 Markdown，用作 header 标题."""
+    final: list[str] = []
+    for seg in segments:
+        if seg.type == SegmentType.ANSWER:
+            if seg.text:
+                final.append(seg.text)
+        elif seg.type in (SegmentType.REASONING, SegmentType.TOOL):
+            final = []
+    in_fence = False
+    for raw in "\n".join(final).splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line or line.startswith("|") or set(line) <= set("-*_= "):
+            continue
+        line = _TAG_RE.sub("", _MD_LINK_RE.sub(r"\1", line))
+        line = _LEAD_RE.sub("", line).replace("**", "").replace("__", "").replace("`", "").strip()
+        line = line.rstrip(":").strip()
+        if not line or line == "NO_REPLY":
+            continue
+        if len(line) > _CONCLUSION_MAX:
+            cut = line.find(". ", 20, _CONCLUSION_MAX)
+            line = line[: cut + 1] if cut > 0 else line[: _CONCLUSION_MAX - 1].rstrip() + "…"
+        return line
+    return ""
 
 
 def _loading_element() -> dict:
@@ -435,8 +472,10 @@ def build_complete_card(
     body_text_size: str = "normal_v2",
     show_tool_use: bool = True,
     width_mode: str = "default",
+    done_placeholder: bool = True,
+    header_title: str = "status",
 ) -> dict[str, Any]:
-    """完成态流式卡片 — 按 segments 顺序渲染."""
+    """完成态流式卡片 — 按 segments 顺序渲染；done_placeholder=False 时无正文也不补「完成。」."""
     elements: list[dict] = []
     has_answer = False
 
@@ -461,7 +500,7 @@ def build_complete_card(
             for chunk in _split_long_text(content):
                 elements.append({"tag": "markdown", "content": chunk, "text_size": body_text_size})
 
-    if not has_answer:
+    if not has_answer and done_placeholder:
         elements.append({"tag": "markdown", "content": _T["done"][0], "text_size": body_text_size})
 
     if footer_enabled:
@@ -497,7 +536,8 @@ def build_complete_card(
     card["body"] = {"elements": elements}
     if header_enabled:
         header_status = "error" if is_error else "stopped" if is_aborted else "completed"
-        card["header"] = _build_header(header_status)
+        conclusion = _conclusion(segments) if header_title == "conclusion" else ""
+        card["header"] = _build_header(header_status, conclusion)
     return card
 
 
