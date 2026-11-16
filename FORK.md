@@ -5,9 +5,11 @@ running as the live Feishu card plugin for his Hermes agent (Zex).
 
 ## Branches
 
-- `main`: mirror of `upstream/main`. Never commit here.
-- `anup/main`: what runs. Upstream main plus our changes. The live plugin
-  (`~/.hermes/plugins/hermes-lark-streaming`) is checked out on this branch.
+- `main`: the released fork, upstream plus our changes. `anup/main` is merged into it with a merge
+  commit (Anup's call, 2026-11-16); it is the GitHub default view.
+- `anup/main`: what runs. The live plugin (`~/.hermes/plugins/hermes-lark-streaming`) is checked
+  out on this branch; merge it into `main` when a batch of changes is done.
+- Upstream is tracked only through the `upstream` remote (`upstream/main`).
 - `zex/<topic>`: one branch per change, cut from `anup/main`, merged back with `git merge`.
 
 ## Our changes on top of upstream
@@ -16,6 +18,8 @@ running as the live Feishu card plugin for his Hermes agent (Zex).
 - `card.split_content`: two cards per turn, work and final answer (the answer moves to its own card when the turn ends)
 - `card.recover_orphans`: cards left on Processing by a killed gateway are restored from a snapshot and marked Interrupted (idea from wzgrx/hermes-lark-streaming)
 - `card.rollover_minutes`: roll over to a new card before Feishu's ~10 min streaming limit (idea from wzgrx)
+- `/mention`-friendly per-group rules and topic-group fixes: silent turns recall their card, and
+  turns without an inbound message (background-job notices) reply inside their topic
 - `card.header.title: conclusion`: the green completed header shows the answer's first line instead of "Completed"
 
 ## Remotes and checkouts
@@ -29,11 +33,11 @@ running as the live Feishu card plugin for his Hermes agent (Zex).
 
 ```bash
 cd ~/hermes-plugin-src/hermes-lark-streaming
-git fetch upstream && git checkout main && git merge --ff-only upstream/main && git push origin main
-git checkout anup/main && git merge upstream/main   # merge, never rebase
+git fetch upstream && git checkout anup/main && git merge upstream/main   # merge, never rebase
 # run the gates in AGENTS.md, then:
 git push origin anup/main
 cd ~/.hermes/plugins/hermes-lark-streaming && git pull --ff-only origin anup/main
+# release: merge anup/main into main (merge commit) and push main
 ```
 
 Then restart the gateway (`touch ~/.hermes/state/zex-reload.request`, or `/restart`).
