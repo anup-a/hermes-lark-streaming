@@ -42,6 +42,12 @@ behaves like upstream until you turn them on.
 - The green "Completed" header shows the first line of the final answer instead (Markdown
   stripped, up to 80 characters). Errors and stops keep their status title.
 
+### Card clicks reach the agent (`card_actions_to_agent: true`)
+- Clicks on cards the bot sent itself (buttons, selects, form submits; not Hermes's own approval or
+  clarify cards) arrive as a normal message `[Card action] {...}` with `card_message_id`, `tag`,
+  `value`, `form_value`, `input_value`, `option(s)` and `checked`, replying to the card.
+- Without it, Hermes turns the click into an unknown `/card` command and drops the form values.
+
 ### HTML and images inside cards
 - ```` ```html ```` blocks in the answer are rendered by headless Chromium (JS runs, so canvas and
   SVG charts work), trimmed to the content height and uploaded as a card image. Theme variables
@@ -72,6 +78,7 @@ platforms:
         split_content: true
         recover_orphans: true
         rollover_minutes: 8
+        card_actions_to_agent: true
         footer:
           fields:
             - [status, elapsed, context]
@@ -153,6 +160,7 @@ All keys below are relative to `platforms.feishu.extra.card`. Unset values use t
 | `split_content` | `false` | Two cards per turn: work (reasoning, tools, interim notes) and the final answer with the footer; the answer moves to its own card when the turn ends |
 | `recover_orphans` | `false` | Keep a registry and periodic snapshot of open cards in `state/`; after a gateway crash or kill, the next turn replaces cards left on Processing with their last snapshot, marked Interrupted |
 | `rollover_minutes` | `0` | Feishu closes a card's streaming after about 10 minutes; past this age, seal the card with "Continued in the next card" and continue on a new one (`0` disables; `8` recommended) |
+| `card_actions_to_agent` | `false` | Route clicks on the bot's own cards to the agent as a `[Card action] {...}` message with form and input values, instead of Hermes's `/card` command |
 | `header.enabled` | `false` | Show the status header |
 | `header.title` | `status` | Completed-card header title: `status` ("Completed") or `conclusion` (first line of the final answer, Markdown stripped, up to 80 chars; errors and stops keep their status) |
 | `body.text_size` | `normal_v2` | Answer Markdown font size; use a CardKit-supported size token |

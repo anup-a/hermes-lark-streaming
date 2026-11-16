@@ -656,3 +656,46 @@ async def test_synthetic_turn_in_topic_replies_inside_the_topic(adapter):
     adapter.cards._client.reply_card_by_id.assert_awaited_with("topic-msg", "card-id")
     adapter.cards._client.send_card_to_chat.assert_not_called()
     await adapter.cards.close()
+
+
+def _card_click(**action):
+    return SimpleNamespace(
+        event=SimpleNamespace(
+            token="tok-1",
+            context=SimpleNamespace(open_chat_id="oc_chat", open_message_id="om_card"),
+            operator=SimpleNamespace(open_id="ou_user"),
+            action=SimpleNamespace(**{"value": None, "tag": None, "name": None, "form_value": None,
+                                      "input_value": None, "option": None, "options": None,
+                                      "checked": None, "timezone": None, **action}),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_card_action_goes_to_agent_with_form_values(tmp_path):
+    config = PlatformConfig(enabled=True, extra={"app_id": "app", "app_secret": "secret",
+                                                 "card": {"card_actions_to_agent": True}})
+    value = FeishuStreamingAdapter(config)
+    try:
+        value._dispatch_synthetic_event = AsyncMock()
+        data = _card_click(tag="button", value={"step": "dates"}, form_value={"city": "SIN"})
+        await value._handle_card_action_event(data)
+        await value._handle_card_action_event(data)
+        value._dispatch_synthetic_event.assert_awaited_once()
+        kwargs = value._dispatch_synthetic_event.await_args.kwargs
+        assert kwargs["message_type"].name == "TEXT"
+        assert kwargs["message_id"] == "om_card"
+        assert kwargs["chat_id"] == "oc_chat"
+        payload = json.loads(kwargs["text"].removeprefix("[Card action] "))
+        assert payload == {"card_message_id": "om_card", "tag": "button",
+                           "value": {"step": "dates"}, "form_value": {"city": "SIN"}}
+    finally:
+        ACTIVE.discard(value)
+
+
+@pytest.mark.asyncio
+async def test_card_action_option_off_keeps_builtin_command(adapter):
+    adapter._dispatch_synthetic_event = AsyncMock()
+    await adapter._handle_card_action_event(_card_click(tag="button", value={"a": 1}))
+    kwargs = adapter._dispatch_synthetic_event.await_args.kwargs
+    assert kwargs["text"].startswith("/card button")

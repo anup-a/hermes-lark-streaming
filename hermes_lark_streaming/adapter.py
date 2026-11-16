@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import weakref
 from collections import OrderedDict
+from types import SimpleNamespace
 from typing import Any
 
 from gateway.config import StreamingConfig
 from gateway.platforms.base import MessageEvent, SendResult
+from gateway.platforms.event import MessageType
 from gateway.session_context import get_session_env
 from plugins.platforms.feishu import adapter as builtin
 
@@ -194,6 +197,38 @@ class FeishuStreamingAdapter(builtin.FeishuAdapter):
         }
         for source_id in sources:
             await self.cards.close_source(source_id)
+
+    async def _handle_card_action_event(self, data: Any) -> None:
+        if not self.cards._cfg.card_actions_to_agent:
+            await super()._handle_card_action_event(data)
+            return
+        event = getattr(data, "event", None)
+        token = str(getattr(event, "token", "") or "")
+        if token and self._is_card_action_duplicate(token):
+            return
+        context = getattr(event, "context", None)
+        chat_id = str(getattr(context, "open_chat_id", "") or "")
+        open_id = str(getattr(getattr(event, "operator", None), "open_id", "") or "")
+        if not chat_id or not open_id:
+            return
+        card_message_id = str(getattr(context, "open_message_id", "") or "")
+        action = getattr(event, "action", None)
+        payload: dict[str, Any] = {"card_message_id": card_message_id}
+        for field in ("tag", "name", "value", "form_value", "input_value", "option", "options", "checked", "timezone"):
+            value = getattr(action, field, None)
+            if value not in (None, "", {}, []):
+                payload[field] = value
+        text = "[Card action] " + json.dumps(payload, ensure_ascii=False, default=str)
+        _logger.info("Routing card action %r from %s in %s to the agent", payload.get("tag"), open_id, chat_id)
+        await self._dispatch_synthetic_event(
+            text=text,
+            message_type=MessageType.TEXT,
+            chat_id=chat_id,
+            sender_id=SimpleNamespace(open_id=open_id, user_id=None, union_id=None),
+            event_chat_type="group",
+            raw_message=data,
+            message_id=card_message_id or token,
+        )
 
     async def disconnect(self) -> None:
         try:

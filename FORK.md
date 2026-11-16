@@ -20,6 +20,7 @@ running as the live Feishu card plugin for his Hermes agent (Zex).
 - `card.rollover_minutes`: roll over to a new card before Feishu's ~10 min streaming limit (idea from wzgrx)
 - `/mention`-friendly per-group rules and topic-group fixes: silent turns recall their card, and
   turns without an inbound message (background-job notices) reply inside their topic
+- `card.card_actions_to_agent`: clicks on the bot's own cards reach the agent as `[Card action] {...}` with form/input values
 - `card.header.title: conclusion`: the green completed header shows the answer's first line instead of "Completed"
 
 ## Remotes and checkouts

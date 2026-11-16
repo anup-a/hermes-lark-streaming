@@ -89,6 +89,11 @@ class Config:
         return bool(self._card_options().get("recover_orphans", False))
 
     @property
+    def card_actions_to_agent(self) -> bool:
+        """非 Hermes 卡片的点击作为普通消息交给 agent，带上表单与输入值（card.card_actions_to_agent）."""
+        return bool(self._card_options().get("card_actions_to_agent", False))
+
+    @property
     def rollover_seconds(self) -> float:
         """卡片流式超过该秒数时换新卡（card.rollover_minutes，0 关闭；飞书约 10 分钟关闭流式）."""
         try:
