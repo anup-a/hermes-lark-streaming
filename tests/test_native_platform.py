@@ -639,3 +639,20 @@ async def test_exhausted_sequence_recovery_uses_host_fallback(adapter, method):
     adapter.cards._client.send_card_to_chat.assert_awaited_once()
     assert "complete answer" in str(adapter.cards._client.send_card_to_chat.call_args)
     assert not adapter.cards.turns
+
+
+@pytest.mark.asyncio
+async def test_synthetic_turn_in_topic_replies_inside_the_topic(adapter):
+    event = MessageEvent(
+        text="task",
+        source=SessionSource(platform=Platform.FEISHU, chat_id="chat", user_id="u", thread_id="omt_topic"),
+        message_id="topic-msg",
+        raw_message={"message": {"thread_id": "omt_topic"}},
+    )
+    with patch.object(builtin.FeishuAdapter, "handle_message", new=AsyncMock()):
+        await adapter.handle_message(event)
+    set_session_vars(platform="feishu", chat_id="chat", session_key="agent:main:feishu:group:chat:omt_topic")
+    await adapter.send_stream_frame("", chat_id="chat", reply_to=None, turn_id="notice-turn")
+    adapter.cards._client.reply_card_by_id.assert_awaited_with("topic-msg", "card-id")
+    adapter.cards._client.send_card_to_chat.assert_not_called()
+    await adapter.cards.close()

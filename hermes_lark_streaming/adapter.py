@@ -41,6 +41,7 @@ class FeishuStreamingAdapter(builtin.FeishuAdapter):
         )
         self._stream_cursor = StreamingConfig.from_dict(self.cards._cfg._reload().get("streaming", {})).cursor
         self._card_routes: OrderedDict[tuple[str, str], str] = OrderedDict()
+        self._topic_anchors: OrderedDict[tuple[str, str], str] = OrderedDict()
         self._card_loop: asyncio.AbstractEventLoop | None = None
         self._static_cards: OrderedDict[str, None] = OrderedDict()
         ACTIVE.add(self)
@@ -60,7 +61,21 @@ class FeishuStreamingAdapter(builtin.FeishuAdapter):
             self._card_routes[(event.source.chat_id, source_id)] = event.reply_to_message_id or source_id
             while len(self._card_routes) > 1024:
                 self._card_routes.popitem(last=False)
+            if event.source.thread_id:
+                # 话题群里后台通知等合成回合没有入站消息，靠它回到原话题而不是新开话题
+                key = (event.source.chat_id, str(event.source.thread_id))
+                self._topic_anchors[key] = source_id
+                self._topic_anchors.move_to_end(key)
+                while len(self._topic_anchors) > 1024:
+                    self._topic_anchors.popitem(last=False)
         await super().handle_message(event)
+
+    def _topic_anchor(self, chat_id: str, session_key: str | None) -> str | None:
+        """会话键以话题 ID 结尾时，返回该话题里最近一条入站消息."""
+        thread_id = (session_key or "").rsplit(":", 1)[-1]
+        if not thread_id.startswith("omt_"):
+            return None
+        return self._topic_anchors.get((chat_id, thread_id))
 
     def supports_native_streaming(self, chat_type: str | None = None, metadata: dict | None = None) -> bool:
         return bool(self.cards._cfg.enabled)
@@ -83,6 +98,8 @@ class FeishuStreamingAdapter(builtin.FeishuAdapter):
             text = text[:-len(self._stream_cursor)]
         source_id = get_session_env("HERMES_SESSION_MESSAGE_ID") or reply_to or turn_id
         anchor = self._card_routes.get((chat_id, source_id), reply_to)
+        if not anchor:
+            anchor = self._topic_anchor(chat_id, get_session_env("HERMES_SESSION_KEY"))
         try:
             return await self.cards.frame(
                 turn_id,
@@ -115,7 +132,8 @@ class FeishuStreamingAdapter(builtin.FeishuAdapter):
         # 后台通知按明确目标独立投递，不合并进前台活跃卡片
         if not content.strip():
             return await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
-        anchor = reply_to or md.get("reply_to_message_id") or md.get("thread_id")
+        anchor = (reply_to or md.get("reply_to_message_id")
+                  or self._topic_anchor(chat_id, get_session_env("HERMES_SESSION_KEY")) or md.get("thread_id"))
         try:
             assert self.cards._client is not None
             # Cron and background notices: render ```html blocks and upload images like live replies.
