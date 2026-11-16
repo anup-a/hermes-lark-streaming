@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -152,6 +153,9 @@ class StreamCardController(StreamingController):
     async def _finish_locked(self, key: str, turn: Turn, *, aborted: bool = False, failed: bool = False) -> bool:
         turn.closing = True
         session = turn.session
+        if not (aborted or failed) and await self._drop_empty_card(turn):
+            self._retire(key, True)
+            return True
         session.footer.setdefault("duration", time.time() - session.created_at)
         if aborted or failed:
             session.state = SessionState.ABORTED if aborted else SessionState.FAILED
@@ -167,6 +171,29 @@ class StreamCardController(StreamingController):
                 self._pending_tools.popitem(last=False)
         self._retire(key, success, allow_reopen=not (aborted or failed))
         return success
+
+    async def _drop_empty_card(self, turn: Turn) -> bool:
+        """回合没有任何可见内容（如对后台通知静默）时撤回占位卡，而不是留下一张「完成。」."""
+        session = turn.session
+        visible = turn.tools or any(
+            seg.type != SegmentType.ANSWER or seg.text.strip() for seg in session.segment_state.segments
+        )
+        if visible or not session.card_msg_id or self._client is None:
+            return False
+        await session.flush.wait_for_flush()
+        session.flush.mark_completed()
+        try:
+            with contextlib.suppress(Exception):
+                await self._client.cardkit_close_streaming(session.card_id or "", sequence=session.sequence + 1)
+            await self._client.delete_message(session.card_msg_id)
+        except Exception:
+            _logger.warning("Empty card recall failed: msg=%s", session.card_msg_id[:12], exc_info=True)
+            return False
+        session.state = SessionState.COMPLETED
+        self._forget_card(session.card_id)
+        self._cleanup_session(session)
+        _logger.info("Empty card recalled: msg=%s", session.card_msg_id[:12])
+        return True
 
     def _retire(self, key: str, success: bool, *, allow_reopen: bool = False) -> None:
         turn = self.turns.pop(key, None)

@@ -545,3 +545,22 @@ async def test_rollover_off_by_default_keeps_one_card(controller):
     session.card_opened_at -= 60 * 60
     await c.frame("t", "chat", "answer", reply_to="in", source_id="in", finalize=True)
     assert c._client.cardkit_create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_silent_turn_recalls_its_empty_card(controller):
+    c = controller
+    await c.frame("t", "chat", "", reply_to=None, source_id="synthetic")
+    await c.frame("t", "chat", "", reply_to=None, source_id="synthetic", finalize=True)
+    c._client.delete_message.assert_awaited_once_with("message")
+    c._client.cardkit_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_turn_with_tools_but_no_text_keeps_its_card(controller):
+    c = controller
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    await _tool(c, "one", "ls")
+    await c.frame("t", "chat", "", reply_to="in", source_id="in", finalize=True)
+    c._client.delete_message.assert_not_called()
+    c._client.cardkit_update.assert_awaited()
