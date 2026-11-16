@@ -18,7 +18,7 @@
 
 页脚默认单行展示 `status`、`elapsed`、`context`、`model`，原有 `context` 配置可保留。上下文使用原生 Hook 提供的最近一次 `prompt_tokens`（含缓存）和 `context_length`，不跨请求累加。
 
-常规安装与启用步骤见 [README](README.md#安装)。新版保留 `feishu` 平台身份，沿用内置连接与权限实现，无需新建机器人或迁移会话和 Cron 目标。
+常规安装与启用步骤见 [README](README.zh.md#安装)。新版保留 `feishu` 平台身份，沿用内置连接与权限实现，无需新建机器人或迁移会话和 Cron 目标。
 
 ## 回退
 

@@ -1,60 +1,124 @@
-# Hermes Lark Streaming
+# Hermes Lark Streaming (Anup's fork)
 
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.11-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[English](README.en.md)
+[中文 (upstream)](README.zh.md) · [Fork notes](FORK.md) · Upstream: [Cheerwhy/hermes-lark-streaming](https://github.com/Cheerwhy/hermes-lark-streaming)
 
-![Hermes Lark Streaming](assets/cover.jpg)
+Feishu/Lark CardKit 2.0 streaming cards for **Hermes >= 0.22.0**. Every reply from the agent is a
+live card: reasoning and tool calls stream into collapsible panels, the answer streams as Markdown,
+and a footer shows status, time, context and model. It runs inside the Hermes gateway as a native
+platform plugin (it subclasses the built-in Feishu adapter), with no source patches or sidecar.
 
-> **This is Anup Aglawe's fork** of [Cheerwhy/hermes-lark-streaming](https://github.com/Cheerwhy/hermes-lark-streaming).
-> It runs Zex's Lark replies. Branch `anup/main` is upstream plus the changes below, all behind
-> `platforms.feishu.extra.card.*` options that are **off by default**. See [FORK.md](FORK.md) for
-> branches and how we sync with upstream.
->
-> | Option | What it does |
-> |---|---|
-> | `split_content: true` | Two cards per turn: one work card (reasoning, tool calls and in-between notes, no "Done.") and one answer card with the final reply and the footer. The reply streams on the work card and moves to its own card when the turn ends. Errors, stops and plain text replies stay on one card. |
-> | `recover_orphans: true` | Keeps a registry and 5 s snapshots of open cards in `state/`. After a gateway crash or kill, the next turn replaces cards left on "Processing..." with their last snapshot, marked Interrupted. |
-> | `rollover_minutes: 8` | Feishu stops a card's streaming after about 10 minutes. Past this age the card is sealed with "Continued in the next card" and the turn carries on in a new one. |
-> | HTML and images | HTML code blocks and local image files render into cards (T3 theme, layout sheet, `html-preview` CLI). |
->
-> Ideas for `recover_orphans` and `rollover_minutes` come from [wzgrx/hermes-lark-streaming](https://github.com/wzgrx/hermes-lark-streaming).
+This fork runs **Zex**, Anup Aglawe's agent on Lark. It adds the features below on top of upstream.
+Each one sits behind an option under `platforms.feishu.extra.card`, off by default, so the plugin
+behaves like upstream until you turn them on.
 
-Hermes 飞书 / Lark CardKit 2.0 流式卡片插件。0.14.0 起通过 Hermes 原生平台接口接入，在 Gateway 进程内运行。
+## What this fork adds
 
-- 保留内置飞书的连接、用户权限、配对、群策略、附件、话题和审批
-- AI 回复持续更新到卡片，保留思考、工具状态、图片解析和长内容拆卡
-- 在线与独立 Cron、后台任务结果使用卡片投递
-- 卡片失败时交回内置回复链路
-- 不修改 Hermes 源码，不使用 AST 注入、monkey-patch 或 sidecar
+### Two cards per turn: work and answer (`split_content: true`)
+- The **work card** holds reasoning, tool calls and the agent's in-between progress notes. No
+  "Done." filler.
+- The **answer card** holds only the final reply, with the footer.
+- The reply streams on the work card while the agent works, then moves to its own card when the
+  turn ends, so the chat history reads as one clean answer per question.
+- Plain text replies, errors and stopped turns stay on one card. If the answer card cannot be sent,
+  everything stays on the work card, so nothing is lost. A tool result that arrives after the reply
+  does not post the reply twice.
 
-## 要求
+### Cards never stay stuck on "Processing..." (`recover_orphans: true`)
+- Open cards are registered in `~/.hermes/state/hermes-lark-streaming-open-cards.json`, with a
+  snapshot of the card in its "Interrupted" form saved every 5 seconds while it streams.
+- If the gateway is killed or crashes mid-turn, the next message replaces any card left on
+  "Processing..." (older than 60 s) with its last snapshot, so you keep what was already shown.
+  It checks again every 5 minutes and gives up on a card after 3 failed attempts.
 
-- Hermes **>= 0.22.0**，已配置内置飞书渠道
-- Python >= 3.11；Hermes 的运行环境由 Hermes 自己管理
-- `lark-oapi >= 1.6.4`、`PyYAML >= 6.0`
-- 飞书应用具备消息发送/回复、CardKit 读写和所用媒体权限
+### Long turns don't freeze at 10 minutes (`rollover_minutes: 8`)
+- Feishu stops a card's streaming after about 10 minutes. Past the configured age, the card is
+  sealed with "Continued in the next card" and the turn carries on in a new one. The segment still
+  being written moves across whole, so nothing is duplicated.
 
-旧注入版用户必须先阅读 [升级说明](MIGRATION.md)，用旧版卸载注入后再安装新版。
+### Conclusion as the card title (`header.title: conclusion`)
+- The green "Completed" header shows the first line of the final answer instead (Markdown
+  stripped, up to 80 characters). Errors and stops keep their status title.
 
-## 安装
+### HTML and images inside cards
+- ```` ```html ```` blocks in the answer are rendered by headless Chromium (JS runs, so canvas and
+  SVG charts work), trimmed to the content height and uploaded as a card image. Theme variables
+  follow T3 Code's light theme.
+- Markdown images pointing at local files (absolute path or `file://`), such as screenshots the
+  agent took, are uploaded and shown inline. Remote image URLs work as before.
+- Static cards (cron results, background notices, `hermes send`) get the same treatment.
+- Preview a page before sending it: `python -m hermes_lark_streaming.streaming.html_render page.html [out.png]`.
+
+### Topic groups (Lark "topic chat")
+- Turns that have no inbound message, such as a background job's completion notice, reply inside
+  the topic they belong to instead of opening a new topic.
+- A turn that ends with nothing to show (the agent chose to stay silent) recalls its placeholder
+  card instead of leaving an empty "Done." card behind.
+- Fix: the end-of-turn refresh runs under the flush lock, so a card is never split twice.
+
+### Zex's configuration
+
+```yaml
+platforms:
+  feishu:
+    extra:
+      card:
+        enabled: true
+        header:
+          enabled: true
+          title: conclusion
+        split_content: true
+        recover_orphans: true
+        rollover_minutes: 8
+        footer:
+          fields:
+            - [status, elapsed, context]
+            - [tokens, model]
+```
+
+Ideas for `recover_orphans` and `rollover_minutes` come from
+[wzgrx/hermes-lark-streaming](https://github.com/wzgrx/hermes-lark-streaming), re-implemented for
+this card layout: we swap in a full card snapshot because the "Processing..." header cannot be
+changed by a partial update.
+
+## Branches
+
+- `main`: this fork's release, upstream plus the changes above.
+- `anup/main`: what runs live; merged into `main` with a merge commit when a batch is done.
+- Upstream is tracked through the `upstream` remote. See [FORK.md](FORK.md) for syncing.
+
+---
+
+The rest of this README is the upstream reference, updated for this fork.
+
+## Requirements
+
+- Hermes **>= 0.22.0** with the built-in Feishu channel configured
+- Python >= 3.11; Hermes manages its own runtime environment
+- `lark-oapi >= 1.6.4`, `PyYAML >= 6.0`
+- Feishu app permissions for sending/replying to messages, CardKit access and any media features used
+
+Read the [migration guide](MIGRATION.md) before upgrading: remove old injections using the OLD release before installing this version.
+
+## Installation
 
 ```bash
-hermes plugins install https://github.com/Cheerwhy/hermes-lark-streaming
+hermes plugins install https://github.com/anup-a/hermes-lark-streaming
 hermes plugins enable hermes-lark-streaming
 hermes gateway restart
 ```
 
-本地开发可将仓库符号链接到 `~/.hermes/plugins/hermes-lark-streaming`，再执行上述启用和重启命令。修改源码后重启 Gateway 生效。
+For local development, symlink the repository to `~/.hermes/plugins/hermes-lark-streaming`, then enable the plugin and restart as above. Restart the Gateway after source changes.
 
-插件使用正式平台注册接口替换 `feishu` 的展示适配器。保留现有 `platforms.feishu`、凭据、会话和 Cron 目标，不另建渠道。
+The plugin replaces the `feishu` presentation adapter through the native platform registry. Existing channel settings, credentials, sessions and cron targets stay in place.
 
-## 配置
+## Configuration
 
-编辑当前 Hermes Profile 的 `config.yaml`（默认 `~/.hermes/config.yaml`），合并以下配置，保留已有的飞书连接和权限设置。
+Edit the active Hermes profile's `config.yaml` (default: `~/.hermes/config.yaml`). Merge these settings with your existing Feishu connection and access rules.
 
-### 最小配置
+### Minimal setup
 
 ```yaml
 streaming:
@@ -75,29 +139,29 @@ display:
       show_reasoning: false
 ```
 
-`streaming.enabled` 是 Hermes 的流式总开关，默认 `false`，必须开启；同时不要将 `streaming.transport` 设为 `off`，或将 `display.platforms.feishu.streaming` 设为 `false`。
+Hermes's master switch `streaming.enabled` defaults to `false` and must be enabled. Do not set `streaming.transport: off` or `display.platforms.feishu.streaming: false`.
 
-### 卡片参数
+### Card options
 
-以下键均位于 `platforms.feishu.extra.card`，未设置时采用表中默认值。外观选项用于流式卡片及其完成态；独立 Cron、后台结果等静态卡片使用简洁固定样式。
+All keys below are relative to `platforms.feishu.extra.card`. Unset values use these defaults. Appearance options apply to streaming cards and their final state; standalone cron and background deliveries use a simple fixed layout.
 
-| 参数 | 默认值 | 作用 |
+| Key | Default | Effect |
 | --- | --- | --- |
-| `enabled` | `true` | 启用原生流式卡片；`false` 仅关闭流式接管，停用整个插件见下文 |
-| `width_mode` | `default` | 卡片宽度：`default`、`compact`、`fill`；无效值回退为 `default` |
-| `panel_expanded` | `false` | 完成后保持思考、工具面板展开；`false` 表示完成后折叠 |
-| `split_content` | `false` | 每轮两张卡：过程卡（推理、工具、中途说明）与最终正文卡（含 footer）；回合结束时正文移到独立卡片 |
-| `recover_orphans` | `false` | 在 `state/` 登记流式中的卡片并定期保存快照；网关崩溃或被杀后，下一轮把遗留的「处理中」卡片换成最后快照并标记已中断 |
-| `rollover_minutes` | `0` | 飞书约 10 分钟关闭流式；卡片超过该时长时封存旧卡（注明内容见下一张）并换新卡（`0` 关闭，建议 `8`） |
-| `header.enabled` | `false` | 显示顶部状态标题 |
-| `header.title` | `status` | 完成态标题：`status`（「已完成」）或 `conclusion`（最终正文第一行，去掉 Markdown，最多 80 字；出错/停止仍显示状态） |
-| `body.text_size` | `normal_v2` | 正文 Markdown 字号，使用 CardKit 支持的字号标记 |
-| `footer.enabled` | `true` | 显示完成态页脚 |
-| `footer.text_size` | `notation` | 页脚字号，使用 CardKit 支持的字号标记 |
-| `footer.fields` | `[[status, elapsed, context, model]]` | 页脚字段及排列，详见下节 |
-| `footer.show_label` | `false` | 为耗时和上下文增加文字标签 |
+| `enabled` | `true` | Enable native streaming cards; `false` disables streaming integration, not the entire plugin |
+| `width_mode` | `default` | `default`, `compact` or `fill`; invalid values fall back to `default` |
+| `panel_expanded` | `false` | Keep reasoning and tool panels expanded after completion; otherwise collapse them |
+| `split_content` | `false` | Two cards per turn: work (reasoning, tools, interim notes) and the final answer with the footer; the answer moves to its own card when the turn ends |
+| `recover_orphans` | `false` | Keep a registry and periodic snapshot of open cards in `state/`; after a gateway crash or kill, the next turn replaces cards left on Processing with their last snapshot, marked Interrupted |
+| `rollover_minutes` | `0` | Feishu closes a card's streaming after about 10 minutes; past this age, seal the card with "Continued in the next card" and continue on a new one (`0` disables; `8` recommended) |
+| `header.enabled` | `false` | Show the status header |
+| `header.title` | `status` | Completed-card header title: `status` ("Completed") or `conclusion` (first line of the final answer, Markdown stripped, up to 80 chars; errors and stops keep their status) |
+| `body.text_size` | `normal_v2` | Answer Markdown font size; use a CardKit-supported size token |
+| `footer.enabled` | `true` | Show the final footer |
+| `footer.text_size` | `notation` | Footer font size; use a CardKit-supported size token |
+| `footer.fields` | `[[status, elapsed, context, model]]` | Footer fields and ordering; see below |
+| `footer.show_label` | `false` | Add labels to duration and context |
 
-例如调整卡片外观，在已有 `card` 下合并：
+For example, merge this appearance configuration under your existing `card`:
 
 ```yaml
 width_mode: fill
@@ -108,19 +172,19 @@ body:
   text_size: normal_v2
 ```
 
-### 页脚布局
+### Footer layout
 
-`footer.fields` 每个内层数组对应一行，行内用 `·` 分隔。支持以下五个字段；没有数据的字段自动省略。
+Each inner array in `footer.fields` defines one row; fields within a row are separated by `·`. The following five fields are supported. Fields without data are omitted.
 
-| 字段 | 内容 |
+| Field | Content |
 | --- | --- |
-| `status` | 完成、出错或已停止 |
-| `elapsed` | 卡片耗时 |
-| `context` | 最近一次 API 请求的完整输入量 / 宿主上下文上限及占比，包含缓存输入 |
-| `tokens` | 本回合 API 用量累计，`↑` 非缓存输入、`↓` 输出；宿主仅提供完整输入时以完整输入计 |
-| `model` | 模型名称 |
+| `status` | Completed, error or stopped |
+| `elapsed` | Card duration |
+| `context` | Latest request's full prompt / host context limit and percentage, including cached input |
+| `tokens` | Accumulated usage for this turn: `↑` uncached input, `↓` output; full input is used if that is all the host provides |
+| `model` | Model name |
 
-例如在 `platforms.feishu.extra.card` 下设置两行页脚：
+For a two-row footer, set this under `platforms.feishu.extra.card`:
 
 ```yaml
 footer:
@@ -132,18 +196,18 @@ footer:
     - [tokens, model]
 ```
 
-一维数组如 `[status, elapsed]` 表示单行；空数组恢复默认布局，隐藏页脚请用 `footer.enabled: false`。`context` 缺少完整输入量或窗口上限时省略；默认布局为单行 `[status, elapsed, context, model]`，`tokens` 可按需加入。
+A flat array such as `[status, elapsed]` creates one row. An empty array restores the default layout; use `footer.enabled: false` to hide the footer. `context` is omitted if the prompt count or context limit is unavailable. The default is one row of `[status, elapsed, context, model]`; add `tokens` as needed.
 
-### 思考与工具面板
+### Reasoning and tools
 
-| 配置路径 | 默认值 | 作用 |
+| Configuration path | Default | Effect |
 | --- | --- | --- |
-| `display.platforms.feishu.show_tool_use` | `true` | 显示卡片工具面板：名称、简短参数、状态和耗时；不展示完整成功结果 |
-| `display.platforms.feishu.show_reasoning` | `false` | 显示模型提供的思考内容，还需开启下方事件开关 |
-| `plugins.stream_reasoning_deltas` | `false` | 允许 Hermes 向插件提供流式思考事件 |
-| `display.platforms.feishu.tool_progress` | Hermes 决定 | 建议设为 `'off'`，避免宿主工具进度文本与卡片工具面板重复 |
+| `display.platforms.feishu.show_tool_use` | `true` | Show tool names, short arguments, status and duration; omit full successful results |
+| `display.platforms.feishu.show_reasoning` | `false` | Show reasoning provided by the model; also enable the event switch below |
+| `plugins.stream_reasoning_deltas` | `false` | Allow Hermes to send streaming reasoning events to plugins |
+| `display.platforms.feishu.tool_progress` | Set by Hermes | Set to `'off'` to avoid duplicating the plugin's tool panel with host progress text |
 
-`show_tool_use`、`show_reasoning` 的读取顺序为飞书专属设置 → `display` 下的同名全局设置 → 表中默认值。例如展示思考：
+For `show_tool_use` and `show_reasoning`, precedence is Feishu-specific setting → the same key under global `display` → the default above. To display reasoning:
 
 ```yaml
 plugins:
@@ -154,46 +218,46 @@ display:
       show_reasoning: true
 ```
 
-展示开关不限制工具权限，也不会让模型产生原本未提供的思考内容。
+Display switches do not restrict tool permissions or make a model provide reasoning it does not emit.
 
-### 生效与渠道设置
+### Applying changes and channel settings
 
-修改卡片参数或宿主流式设置后执行 `hermes gateway restart`。`show_tool_use`、`show_reasoning` 会在运行中重新读取，作用于后续渲染，不主动刷新已结束的历史卡片。
+Run `hermes gateway restart` after changing card options or host streaming settings. `show_tool_use` and `show_reasoning` are reread at runtime for subsequent rendering; completed historical cards are not proactively refreshed.
 
-凭据与渠道设置继续使用 Hermes 内置飞书配置：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_DOMAIN`，以及 `platforms.feishu.extra` 下的连接、群策略等选项，不放入 `card`。插件不新增渠道权限配置。
+Keep using Hermes's built-in Feishu credentials (`FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_DOMAIN`) and connection/group settings under `platforms.feishu.extra`. Do not place them under `card`. This plugin adds no channel permission settings.
 
-旧版卡片参数从 `streaming.*` 移至 `platforms.feishu.extra.card`，全局 `streaming.enabled` 保留原位；插件不会自动迁移旧配置，详见 [升级说明](MIGRATION.md)。
+Legacy card options move from `streaming.*` to `platforms.feishu.extra.card`; the global `streaming.enabled` stays in place. Configuration is not automatically migrated; see the [migration guide](MIGRATION.md).
 
-命令审批后的答案遵循 Hermes 0.22.0 的协议，一次性发送终态卡；澄清后可恢复流式。澄清选项沿用内置文本回复流程，审批按钮沿用内置卡片回调。
+Approval follow-ups are delivered as final static cards under the Hermes 0.22.0 protocol; clarification can reopen streaming. Clarification uses the built-in text reply flow, and approval buttons retain built-in callbacks.
 
-## 卡片展示
+## Card Preview
 
-回答持续更新到卡片，支持思考和工具面板，长内容自动拆卡。
+Streaming answers with reasoning and tool panels; long content automatically splits across cards.
 
-![流式卡片](assets/streaming.jpg)
+![Streaming card](assets/streaming.jpg)
 
-使用 `/stop` 停止生成：
+Stopping with `/stop`:
 
-![停止生成后的卡片](assets/abort.jpg)
+![Stopped card](assets/abort.jpg)
 
-新消息打断当前回复：
+Interrupting an active response with a new message:
 
-![消息打断后的卡片](assets/interrupt.jpg)
+![Interrupted response](assets/interrupt.jpg)
 
-以上为既有渲染效果截图，实际展示取决于卡片配置与宿主版本。0.14.0 原生接入已通过自动化测试，真实飞书端验收尚未执行。
+Screenshots show the existing renderer; appearance depends on card settings and the host version. This fork runs live on Lark as Zex's reply renderer.
 
-## 停用与诊断
+## Disabling and diagnostics
 
 ```bash
 hermes plugins disable hermes-lark-streaming
 hermes gateway restart
 ```
 
-停用后恢复内置飞书展示。`python -m hermes_lark_streaming verify` 只读检查宿主接口和遗留注入，不会发消息或改配置。旧 `install`、`uninstall`、`restore` 补丁命令已移除。
+Disabling restores built-in Feishu rendering. `python -m hermes_lark_streaming verify` checks local native interfaces and leftover injections without sending messages or changing configuration. The old patch commands `install`, `uninstall` and `restore` have been removed.
 
-## 开发与验证
+## Development and validation
 
-在隔离开发环境安装本插件与固定的 Hermes 0.22.0 源码，然后执行：
+Install the plugin and a fixed Hermes 0.22.0 checkout in an isolated development environment, then run:
 
 ```bash
 python -m pip install -e '.[dev]'
@@ -202,15 +266,15 @@ python -m mypy hermes_lark_streaming scripts
 python -m pytest tests -q
 ```
 
-插件复用内置飞书适配器，并读取宿主的消息上下文；这些依赖包含私有接口，升级 Hermes 后应重新验证兼容性。
+The plugin reuses the built-in Feishu adapter and host message context, including private interfaces. Recheck compatibility after upgrading Hermes.
 
-CI 固定测试 Hermes 0.22.0 和 0.22.5。API 测试使用模拟飞书服务，集成测试使用实际 Hermes 注册器和流式消费者；真实飞书收发需单独验收。
+CI covers Hermes 0.22.0 and 0.22.5 with mocked Feishu APIs and real Hermes registries and stream consumers. Live Feishu messaging requires separate acceptance testing.
 
-真实出站验收：设置 `FEISHU_E2E_APP_ID`、`FEISHU_E2E_APP_SECRET` 后，执行 `python scripts/feishu_smoke.py --chat-id <测试群ID> --scenario all`。脚本发送固定测试卡片，覆盖流式、序号恢复、拆卡、停止和静态更新；可加 `--reply-to <消息ID>` 验证引用，不调用模型或真实工具。入站权限、澄清和 Cron 调度仍需人工验收。
+For real outbound checks, set `FEISHU_E2E_APP_ID` and `FEISHU_E2E_APP_SECRET`, then run `python scripts/feishu_smoke.py --chat-id <test-chat-id> --scenario all`. It sends fixed test cards for streaming, sequence recovery, splitting, stopping and static updates; add `--reply-to <message-id>` to check quoted replies. No model or tools run. Inbound permissions, clarification and Cron scheduling still need manual acceptance.
 
-## 贡献者
+## Contributors
 
-感谢以下贡献者的 Issue 和 PR：
+Thanks to our contributors for their issues and pull requests:
 
 <a href="https://github.com/Mxin-9527"><img src="https://avatars.githubusercontent.com/u/178271393?v=4&s=64" width="48" height="48" style="border-radius:50%" /></a>
 <a href="https://github.com/gitteeee"><img src="https://avatars.githubusercontent.com/u/128769493?v=4&s=64" width="48" height="48" style="border-radius:50%" /></a>
@@ -225,8 +289,8 @@ CI 固定测试 Hermes 0.22.0 和 0.22.5。API 测试使用模拟飞书服务，
 <a href="https://github.com/wzgrx"><img src="https://avatars.githubusercontent.com/u/39661556?v=4&s=64" width="48" height="48" style="border-radius:50%" /></a>
 <a href="https://github.com/zhaomingcheng01"><img src="https://avatars.githubusercontent.com/u/46734892?v=4&s=64" width="48" height="48" style="border-radius:50%" /></a>
 
-灵感来源于 [openclaw-lark](https://github.com/larksuite/openclaw-lark) 和 [hermes-feishu-streaming-card](https://github.com/baileyh8/hermes-feishu-streaming-card)。
+Inspired by [openclaw-lark](https://github.com/larksuite/openclaw-lark) and [hermes-feishu-streaming-card](https://github.com/baileyh8/hermes-feishu-streaming-card).
 
-## 许可证
+## License
 
 [MIT](LICENSE)
