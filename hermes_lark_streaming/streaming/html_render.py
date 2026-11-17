@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 _logger = logging.getLogger("hermes_lark_streaming")
 
@@ -50,7 +51,9 @@ THEME_VARS = {
     "--chart-1": "#1b4ed8", "--chart-2": "#0d9488", "--chart-3": "#d97706",
     "--chart-4": "#9333ea", "--chart-5": "#e11d48", "--chart-6": "#65a30d",
     "--radius": "0.625rem",
-    "--font-sans": '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif',
+    "--font-sans": (
+        '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif'
+    ),
     "--font-mono": '"SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
 }
 _BASE_CSS = (
@@ -154,7 +157,7 @@ def main() -> int:
         print("usage: html-preview <page.html|-> [out.png]", file=sys.stderr)
         return 2
     src = sys.argv[1]
-    html = sys.stdin.read() if src == "-" else open(src, encoding="utf-8").read()
+    html = sys.stdin.read() if src == "-" else Path(src).read_text(encoding="utf-8")
     out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(tempfile.gettempdir(), "html-preview.png")
     result = render_page(html)
     if result.png:
