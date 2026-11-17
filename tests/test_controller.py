@@ -392,6 +392,28 @@ async def test_split_content_keeps_interim_notes_on_the_work_card(split_controll
 
 
 @pytest.mark.asyncio
+async def test_split_content_reasoning_inside_the_reply_does_not_cut_it(split_controller, tmp_path):
+    (tmp_path / "config.yaml").write_text("display:\n  show_reasoning: true\n")
+    c = split_controller
+    await c.frame("t", "chat", "", reply_to="in", source_id="in")
+    session = c.turns["t"].session
+    await _tool(c, "one", "work-log-marker")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "reply-head-marker", reply_to="in", source_id="in")
+    await c._do_flush(session)
+    await c.observe("in", "reasoning", {"delta": "mid-thought-marker"})
+    await c.frame("t", "chat", "reply-head-marker reply-tail-marker", reply_to="in", source_id="in")
+    await c._do_flush(session)
+    await c.frame("t", "chat", "reply-head-marker reply-tail-marker", reply_to="in", source_id="in", finalize=True)
+    assert c._client.cardkit_create.await_count == 2
+    work = _updates(c)["card-1"]
+    answer = str(c._client.cardkit_create.await_args_list[1].args[0])
+    assert "reply-head-marker" in answer and "reply-tail-marker" in answer
+    assert "reply-head-marker" not in work and "reply-tail-marker" not in work
+    assert "mid-thought-marker" not in answer
+
+
+@pytest.mark.asyncio
 async def test_split_content_plain_reply_stays_one_card(split_controller):
     c = split_controller
     await c.frame("t", "chat", "", reply_to="in", source_id="in")
