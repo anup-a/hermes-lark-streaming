@@ -55,7 +55,7 @@ class ImageResolver:
         if "![" not in text:
             return text
 
-        def _replace(m: re.Match) -> str:
+        def _replace(m: re.Match[str]) -> str:
             alt = str(m.group(0)).split("](")[0][2:]  # extract alt text
             url = str(m.group(1))
 
@@ -102,7 +102,7 @@ class ImageResolver:
     def _resolve_html(self, text: str, final: bool) -> str:
         """```html blocks -> rendered card image (img_key), rendering in the background."""
 
-        def _replace(m: re.Match) -> str:
+        def _replace(m: re.Match[str]) -> str:
             html = m.group(1)
             key = "html:" + hashlib.sha1(html.encode("utf-8")).hexdigest()
             if key in self._cache:

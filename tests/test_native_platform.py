@@ -399,7 +399,11 @@ async def test_native_clarify_text_card_keeps_core_reply_resolution(adapter):
     register("clarify", "s", "Which?", ["A", "B"])
     try:
         mark_awaiting_text("clarify")
-        sent = await adapter.send_clarify("chat", "Which?", ["A", "B"], "clarify", "s")
+        # Hermes >= 0.23 sends multiple choice as a native button card; the fixture has no Lark client.
+        ok = AsyncMock(return_value=SendResult(success=True))
+        with patch.object(adapter, "_client", MagicMock()), \
+                patch.object(builtin.FeishuAdapter, "_send_interactive_card", new=ok, create=True):
+            sent = await adapter.send_clarify("chat", "Which?", ["A", "B"], "clarify", "s")
         assert sent.success
         assert _entries["clarify"].awaiting_text
         assert resolve_gateway_clarify("clarify", "A")
