@@ -9,11 +9,12 @@ Hermes >= 0.22.0 native Feishu/Lark streaming-card platform plugin. Register a s
 Use an isolated Python environment derived from Hermes's managed Python for local tests. Do not pip-install development dependencies into the user's live managed environment. Install the fixed Hermes 0.22.0 source and this package in the test environment.
 
 ```bash
-python -m ruff check hermes_lark_streaming tests scripts __init__.py
-python -m mypy hermes_lark_streaming scripts
-python -m pytest tests -q
+scripts/check.sh <venv python>   # ruff + mypy + pytest, fails if any test is skipped
 python -m hermes_lark_streaming verify
 ```
+
+A skipped test means the venv cannot import Hermes, which silently drops the native-platform tests.
+The venv needs `pip install -e '.[dev]' pillow ruamel.yaml`; `HERMES_SRC` points at the Hermes checkout.
 
 ## Architecture and constraints
 
