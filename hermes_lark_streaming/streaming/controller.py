@@ -459,19 +459,24 @@ class StreamingController:
                     return
                 _logger.debug("CardKit stream element failed: %s el=%s", e, seg.el_id, exc_info=True)
 
-    def _split_final_answer(self, segments: list[Segment]) -> int | None:
-        """split_content：返回末尾连续正文段的起点；前面没有可见的推理/工具时返回 None（单卡）."""
-        start = len(segments)
-        while start > 0 and segments[start - 1].type == SegmentType.ANSWER:
-            start -= 1
-        tail = segments[start:]
-        if not any(seg.text.strip() for seg in tail):
+    def _split_final_answer(self, segments: list[Segment]) -> tuple[list[Segment], list[Segment]] | None:
+        """split_content：最后一次工具调用之后的全部正文进正文卡；夹在正文中间的推理留在过程卡，
+        不把一段回复切成两半。前面没有可见的推理/工具时返回 None（单卡）."""
+        last_tool = max((i for i, seg in enumerate(segments) if seg.type == SegmentType.TOOL), default=-1)
+        start = next(
+            (i for i in range(last_tool + 1, len(segments))
+             if segments[i].type == SegmentType.ANSWER and segments[i].text.strip()),
+            None,
+        )
+        if start is None:
             return None
+        answer = [seg for seg in segments[start:] if seg.type == SegmentType.ANSWER]
+        work = segments[:start] + [seg for seg in segments[start:] if seg.type != SegmentType.ANSWER]
         has_work = any(
             seg.type == SegmentType.REASONING or (seg.type == SegmentType.TOOL and self._cfg.show_tool_use)
             for seg in segments[:start]
         )
-        return start if has_work else None
+        return (work, answer) if has_work else None
 
     async def _do_batch_update(
         self,
@@ -832,9 +837,10 @@ class StreamingController:
             if self._cfg.split_content and not (is_error or is_aborted) else None
         )
         if split_at is not None:
-            card = complete_card(active_segments[:split_at], footer=False, done=False)
+            work_segments, answer_segments = split_at
+            card = complete_card(work_segments, footer=False, done=False)
             if not session.answer_sent:  # 工具结果晚到时会再次完成：正文卡只发一次
-                answer_card = complete_card(active_segments[split_at:])
+                answer_card = complete_card(answer_segments)
 
         streaming_closed = session.state == SessionState.COMPLETED
         for attempt in range(3):
