@@ -682,3 +682,71 @@ class TestConclusionHeader:
     def test_default_keeps_completed(self) -> None:
         card = build_complete_card(segments=[_seg("answer", "Hi")], all_tool_steps=[], header_enabled=True)
         assert "Completed" in card["header"]["title"]["content"]
+
+
+class TestVerdictHeader:
+    def _card(self, segments: list[Segment], **kw: object) -> dict:
+        return build_complete_card(
+            segments=segments, all_tool_steps=[], header_enabled=True, footer_enabled=False,
+            header_title="verdict", **kw,  # type: ignore[arg-type]
+        )
+
+    def _body(self, card: dict) -> str:
+        return "\n".join(str(e.get("content", "")) for e in card["body"]["elements"])
+
+    def test_mark_sets_title_colour_and_leaves_body(self) -> None:
+        card = self._card([
+            _seg("answer", "Looking."), _seg("tool"),
+            _seg("answer", "⚠️ **Root cause:** ByteMock timed out\n\n**ByteMock** returned 504 after 60 s."),
+        ])
+        assert card["header"]["title"]["content"] == "⚠️ Root cause: ByteMock timed out"
+        assert card["header"]["template"] == "orange"
+        body = self._body(card)
+        assert "Root cause" not in body and "504 after 60 s" in body
+
+    def test_each_mark_colour(self) -> None:
+        for mark, color in (("✅", "green"), ("⏳", "blue"), ("❌", "red")):
+            assert self._card([_seg("answer", f"{mark} Title\nbody")])["header"]["template"] == color
+
+    def test_unmarked_falls_back_to_conclusion(self) -> None:
+        card = self._card([_seg("answer", "Merged feat/x\nbody")])
+        assert card["header"]["title"]["content"] == "✅ Merged feat/x"
+        assert card["header"]["template"] == "green"
+        assert "Merged feat/x" in self._body(card)
+
+    def test_error_keeps_status(self) -> None:
+        card = self._card([_seg("answer", "✅ Done\nbody")], is_error=True)
+        assert card["header"]["template"] == "red"
+        assert "✅ Done" in self._body(card)
+
+
+class TestFoldDetails:
+    def _elements(self, text: str, **kw: object) -> list[dict]:
+        card = build_complete_card(
+            segments=[_seg("answer", text)], all_tool_steps=[], footer_enabled=False,
+            fold_details=True, **kw,  # type: ignore[arg-type]
+        )
+        return list(card["body"]["elements"])
+
+    def test_bold_heading_folds_the_rest(self) -> None:
+        els = self._elements("Short verdict.\n\n**Evidence and what to do**\n- logid 123\n- next step")
+        assert [e["tag"] for e in els] == ["markdown", "collapsible_panel"]
+        assert "logid" not in els[0]["content"]
+        panel = els[1]
+        assert panel["expanded"] is False
+        assert "Evidence and what to do" in panel["header"]["title"]["content"]
+        assert "logid 123" in panel["elements"][0]["content"]
+
+    def test_hash_heading_and_details_word(self) -> None:
+        els = self._elements("Verdict.\n## Details\nmore")
+        assert els[-1]["tag"] == "collapsible_panel"
+
+    def test_inline_mention_does_not_fold(self) -> None:
+        els = self._elements("See the **Details** tab for more.\nEvidence: logid 1")
+        assert [e["tag"] for e in els] == ["markdown"]
+
+    def test_off_by_default(self) -> None:
+        card = build_complete_card(
+            segments=[_seg("answer", "V.\n**Details**\nx")], all_tool_steps=[], footer_enabled=False,
+        )
+        assert [e["tag"] for e in card["body"]["elements"]] == ["markdown"]

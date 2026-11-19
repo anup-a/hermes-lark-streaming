@@ -38,6 +38,14 @@ behaves like upstream until you turn them on.
   sealed with "Continued in the next card" and the turn carries on in a new one. The segment still
   being written moves across whole, so nothing is duplicated.
 
+### Verdict title, colour and folded details (`header.title: verdict`, `fold_details`)
+
+The agent starts its answer with a status mark, e.g. `⚠️ Root cause: ByteMock timed out`. The line moves
+into the header and the mark picks the colour (✅ green, ⏳ blue, ⚠️ orange, ❌ red), so a glance at the
+chat shows which answers need attention. Evidence and next steps go under a standalone
+`**Evidence and what to do**` line, which folds into a collapsed panel so the card shows only the
+verdict and a short summary. Inspired by the KeyClaw bot's `set_final_card` output.
+
 ### Conclusion as the card title (`header.title: conclusion`)
 - The green "Completed" header shows the first line of the final answer instead (Markdown
   stripped, up to 80 characters). Errors and stops keep their status title.
@@ -74,11 +82,12 @@ platforms:
         enabled: true
         header:
           enabled: true
-          title: conclusion
+          title: verdict
         split_content: true
         recover_orphans: true
         rollover_minutes: 8
         card_actions_to_agent: true
+        fold_details: true
         footer:
           fields:
             - [status, elapsed, context]
@@ -162,7 +171,8 @@ All keys below are relative to `platforms.feishu.extra.card`. Unset values use t
 | `rollover_minutes` | `0` | Feishu closes a card's streaming after about 10 minutes; past this age, seal the card with "Continued in the next card" and continue on a new one (`0` disables; `8` recommended) |
 | `card_actions_to_agent` | `false` | Route clicks on the bot's own cards to the agent as a `[Card action] {...}` message with form and input values, instead of Hermes's `/card` command |
 | `header.enabled` | `false` | Show the status header |
-| `header.title` | `status` | Completed-card header title: `status` ("Completed") or `conclusion` (first line of the final answer, Markdown stripped, up to 80 chars; errors and stops keep their status) |
+| `header.title` | `status` | Completed-card header title: `status` ("Completed"), `conclusion` (first line of the final answer, Markdown stripped, up to 80 chars) or `verdict` (a first line starting with ✅ / ⏳ / ⚠️ / ❌ becomes the title and leaves the body; the mark sets the colour green / blue / orange / red; unmarked answers fall back to `conclusion`). Errors and stops keep their status |
+| `fold_details` | `false` | A standalone `**Details**`, `**Evidence…**` or `**How I checked…**` line (bold or `#` heading) folds the rest of the answer into a collapsed panel |
 | `body.text_size` | `normal_v2` | Answer Markdown font size; use a CardKit-supported size token |
 | `footer.enabled` | `true` | Show the final footer |
 | `footer.text_size` | `notation` | Footer font size; use a CardKit-supported size token |

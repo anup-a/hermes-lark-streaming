@@ -117,10 +117,15 @@ class Config:
 
     @property
     def header_title(self) -> str:
-        """完成态 header 标题：status（「已完成」）或 conclusion（正文第一行结论）."""
+        """完成态 header 标题：status（「已完成」）/ conclusion（正文第一行）/ verdict（带状态标记的第一行，定颜色）."""
         header = self._card_options().get("header", {})
         title = header.get("title") if isinstance(header, dict) else None
-        return "conclusion" if title == "conclusion" else "status"
+        return title if title in ("conclusion", "verdict") else "status"
+
+    @property
+    def fold_details(self) -> bool:
+        """正文里「Details / Evidence / How I checked」标题之后的内容折叠进面板（card.fold_details）."""
+        return bool(self._card_options().get("fold_details", False))
 
     @property
     def footer_enabled(self) -> bool:

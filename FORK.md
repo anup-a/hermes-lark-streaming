@@ -22,6 +22,8 @@ running as the live Feishu card plugin for his Hermes agent (Zex).
   turns without an inbound message (background-job notices) reply inside their topic
 - `card.card_actions_to_agent`: clicks on the bot's own cards reach the agent as `[Card action] {...}` with form/input values
 - `card.header.title: conclusion`: the green completed header shows the answer's first line instead of "Completed"
+- `card.header.title: verdict`: when the answer's first line starts with ✅ / ⏳ / ⚠️ / ❌, that line becomes the header title (and leaves the body) and the mark picks the colour: green / blue / orange / red. Unmarked answers fall back to `conclusion`
+- `card.fold_details`: a standalone `**Details**` / `**Evidence…**` / `**How I checked…**` line (bold or `#` heading) in the answer folds everything after it into a collapsed panel
 
 ## Remotes and checkouts
 
