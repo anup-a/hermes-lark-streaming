@@ -77,19 +77,24 @@ _HEADER_STATES: dict[str, dict[str, str]] = {
 }
 
 
-def _build_header(status: str, conclusion: str = "") -> dict[str, Any]:
-    """构建卡片级 header — 流式蓝 / 完成绿 / 停止红；完成态可用正文结论替换「已完成」."""
+def _build_header(status: str, conclusion: str = "", template: str = "") -> dict[str, Any]:
+    """构建卡片级 header — 流式蓝 / 完成绿 / 停止红；完成态可用正文结论替换「已完成」.
+
+    template 非空时（verdict 模式）标题按原样使用，颜色取 template.
+    """
     cfg = _HEADER_STATES.get(status, _HEADER_STATES["completed"])
     en_text, zh_text = _T[cfg["i18n_key"]]
+    color = cfg["template"]
     if status == "completed" and conclusion:
-        en_text = zh_text = f"✅ {conclusion}"
+        en_text = zh_text = conclusion if template else f"✅ {conclusion}"
+        color = template or color
     return {
         "title": {
             "tag": "plain_text",
             "content": en_text,
             "i18n_content": _i18n(en_text, zh_text),
         },
-        "template": cfg["template"],
+        "template": color,
     }
 
 
@@ -97,6 +102,81 @@ _CONCLUSION_MAX = 80
 _MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 _TAG_RE = re.compile(r"<[^>]+>")
 _LEAD_RE = re.compile(r"^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+")
+
+
+# verdict 模式：正文第一行以状态标记开头时，该行变成 header 标题并从正文移除，标记决定颜色
+_VERDICT_MARKS: tuple[tuple[str, str], ...] = (
+    ("✅", "green"), ("⏳", "blue"), ("⚠️", "orange"), ("⚠", "orange"), ("❌", "red"),
+)
+_VERDICT_MAX = 100
+# fold_details：正文里单独一行的「Details / Evidence… / How I checked…」标题（# 或 ** 包裹）之后的内容折叠
+_DETAILS_RE = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+(?:\*\*)?|\*\*)((?:Details|Evidence|How I checked)[^*\n]{0,60}?)(?:\*\*)?:?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _final_answers(segments: list[Segment]) -> list[Segment]:
+    """最后一个 reasoning/tool 之后的连续 ANSWER 段."""
+    final: list[Segment] = []
+    for seg in segments:
+        if seg.type == SegmentType.ANSWER:
+            if seg.text:
+                final.append(seg)
+        elif seg.type in (SegmentType.REASONING, SegmentType.TOOL):
+            final = []
+    return final
+
+
+def _verdict(segments: list[Segment]) -> tuple[str, str, Segment | None, str]:
+    """返回 (标题, 颜色, 所在段, 去掉该行后的段文本)；第一行没有状态标记时返回空标题."""
+    final = _final_answers(segments)
+    if not final:
+        return "", "", None, ""
+    seg = final[0]
+    lines = (seg.text or "").split("\n")
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if not line:
+            continue
+        bare = _LEAD_RE.sub("", line).replace("**", "").replace("__", "").strip()
+        for mark, color in _VERDICT_MARKS:
+            if bare.startswith(mark):
+                title = _TAG_RE.sub("", _MD_LINK_RE.sub(r"\1", bare[len(mark):]))
+                title = title.replace("`", "").strip().rstrip(":").strip()
+                if not title:
+                    return "", "", None, ""
+                if len(title) > _VERDICT_MAX:
+                    title = title[: _VERDICT_MAX - 1].rstrip() + "…"
+                rest = "\n".join(lines[i + 1:]).lstrip("\n")
+                return f"{mark} {title}", color, seg, rest
+        return "", "", None, ""
+    return "", "", None, ""
+
+
+def _fold_details(content: str) -> tuple[str, str, str]:
+    """拆出折叠区：返回 (前文, 折叠标题, 折叠内容)；没有标题行或折叠内容为空时标题为空."""
+    m = _DETAILS_RE.search(content)
+    if not m:
+        return content, "", ""
+    body = content[m.end():].strip("\n")
+    if not body.strip():
+        return content, "", ""
+    return content[: m.start()].rstrip(), m.group(1).strip(), body
+
+
+def _build_details_panel(title: str, content: str, text_size: str) -> dict:
+    return _collapsible_panel(
+        expanded=False,
+        title_el={
+            "tag": "markdown",
+            "content": f"**{title}**",
+            "text_size": text_size,
+        },
+        elements=[{"tag": "markdown", "content": chunk, "text_size": text_size}
+                  for chunk in _split_long_text(content)],
+        vertical_spacing="8px",
+    )
 
 
 def _conclusion(segments: list[Segment]) -> str:
@@ -474,10 +554,15 @@ def build_complete_card(
     width_mode: str = "default",
     done_placeholder: bool = True,
     header_title: str = "status",
+    fold_details: bool = False,
 ) -> dict[str, Any]:
     """完成态流式卡片 — 按 segments 顺序渲染；done_placeholder=False 时无正文也不补「完成。」."""
     elements: list[dict] = []
     has_answer = False
+    verdict_title, verdict_color, verdict_seg, verdict_rest = (
+        _verdict(segments) if header_enabled and header_title == "verdict" and not (is_error or is_aborted)
+        else ("", "", None, "")
+    )
 
     for seg in segments:
         if seg.type == SegmentType.REASONING:
@@ -496,9 +581,16 @@ def build_complete_card(
                 elements.append(_build_tool_panel(steps, expanded=panel_expanded, element_id=None))
         elif seg.type == SegmentType.ANSWER and seg.text:
             has_answer = True
-            content = _downgrade_tables(optimize_markdown_style(seg.text))
-            for chunk in _split_long_text(content):
+            text = verdict_rest if seg is verdict_seg else seg.text
+            fold_title, fold_body = "", ""
+            if fold_details:
+                text, fold_title, fold_body = _fold_details(text)
+            content = _downgrade_tables(optimize_markdown_style(text)) if text.strip() else ""
+            for chunk in _split_long_text(content) if content else []:
                 elements.append({"tag": "markdown", "content": chunk, "text_size": body_text_size})
+            if fold_title:
+                body = _downgrade_tables(optimize_markdown_style(fold_body))
+                elements.append(_build_details_panel(fold_title, body, body_text_size))
 
     if not has_answer and done_placeholder:
         elements.append({"tag": "markdown", "content": _T["done"][0], "text_size": body_text_size})
@@ -536,8 +628,11 @@ def build_complete_card(
     card["body"] = {"elements": elements}
     if header_enabled:
         header_status = "error" if is_error else "stopped" if is_aborted else "completed"
-        conclusion = _conclusion(segments) if header_title == "conclusion" else ""
-        card["header"] = _build_header(header_status, conclusion)
+        if verdict_title:
+            card["header"] = _build_header(header_status, verdict_title, verdict_color)
+        else:
+            conclusion = _conclusion(segments) if header_title in ("conclusion", "verdict") else ""
+            card["header"] = _build_header(header_status, conclusion)
     return card
 
 

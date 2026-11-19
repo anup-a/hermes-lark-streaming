@@ -112,6 +112,7 @@ class StreamingController:
             show_tool_use=self._cfg.show_tool_use,
             width_mode=self._cfg.width_mode,
             header_title=self._cfg.header_title,
+            fold_details=self._cfg.fold_details,
         )
 
     def _register_card(self, session: CardSession) -> None:
@@ -827,6 +828,7 @@ class StreamingController:
                 width_mode=self._cfg.width_mode,
                 done_placeholder=done,
                 header_title=self._cfg.header_title,
+                fold_details=self._cfg.fold_details,
             )
 
         card = complete_card(active_segments)
